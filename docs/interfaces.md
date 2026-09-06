@@ -333,6 +333,12 @@ path, command, SEP payload, biometric template, or machine identifier.
 
 ## Renderer selection v1
 
+For an installable example, see the separate Standard Agents
+[touchbar-doom demo](https://github.com/standardagents/touchbar-doom).
+It is an optional Omarchy package that exercises frame submission, touch input,
+and explicit renderer selection. Its leftmost Quit button restores the prior
+renderer. T1Bridge does not install or select the demo automatically.
+
 The package always includes an unprivileged built-in renderer. A user may
 replace it by creating an executable file or symlink at
 `${XDG_CONFIG_HOME}/t1bridge/renderer`; the target may live anywhere the user

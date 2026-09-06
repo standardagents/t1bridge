@@ -63,7 +63,7 @@ kernel combination has been tested. Missing T1 functionality remains in scope.
 | --- | --- | --- |
 | Touch Bar display and touch input | 🟢 Available | Default renderer, Escape, hardware controls, and F1–F12 while Fn is held. This is the Touch Bar display, not the laptop's main GPU/display. |
 | Screen and keyboard brightness buttons | 🟢 Available | Controls the machine's available Linux backlights; this does not mean T1Bridge owns those backlight drivers. |
-| Custom Touch Bar renderers | 🟢 Available | Unprivileged programs through the [renderer interface](docs/interfaces.md#renderer-selection-v1). |
+| Custom Touch Bar renderers | 🟢 Available | Unprivileged programs through the [renderer interface](docs/interfaces.md#renderer-selection-v1). Try the optional [Doom demo](#try-a-custom-touch-bar-ui). |
 | Volume, media controls, desktop HUDs | 🟡 Optional integration | Requires a desktop provider; none is bundled in the core package. |
 | Touch ID enrollment, matching and deletion | 🟢 Available | Standard fprintd tools; up to three enrolled fingers for one Linux owner. Requires preserved Apple EFI data. |
 | sudo, Polkit and lock-screen authentication | 🟡 Requires configuration | Uses `pam_fprintd`; configure each consumer and retain password fallback. |
@@ -82,6 +82,23 @@ host-wide power management are separate from T1Bridge. **Recovery of the T1's
 own functions during host sleep/wake is in scope**; fixing unrelated GPU,
 firmware, or platform suspend problems is not. This is not a complete MacBook
 hardware-enablement bundle.
+
+## Try a custom Touch Bar UI
+
+The separate Standard Agents [touchbar-doom](https://github.com/standardagents/touchbar-doom)
+package is an optional demo for Omarchy users who want to try a nonstandard
+Touch Bar UI. It runs playable Doom with a panoramic game view, labeled HUD, weapon artwork,
+and a mute toggle through T1Bridge's unprivileged renderer interface.
+
+Follow its [installation instructions](https://github.com/standardagents/touchbar-doom#install-the-optional-package)
+to install the package and supply the Doom shareware game data. Open **Touch Bar
+Doom** from the application launcher or run `touchbar-doom launch`. Tap **QUIT**
+at the far left, or press Fn, to restore the previous renderer.
+
+It is not bundled with T1Bridge or installed by default. Installing it does not
+change the active renderer; launching it is an explicit user action. Gameplay
+captures the keyboard until Quit or Fn releases it. A working T1Bridge
+Touch Bar is required first; the demo does not install hardware drivers.
 
 ## Install official packages
 
