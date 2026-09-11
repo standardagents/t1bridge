@@ -48,3 +48,17 @@ System suspend recovery depends on
 saving depends on [#19](https://github.com/standardagents/t1bridge/issues/19).
 Neither is established by a successful sensor read. The parent delivery issue
 is [#17](https://github.com/standardagents/t1bridge/issues/17).
+
+## Attended post-reboot check, 2026-09-11
+
+After the owner reported rebooting, `iio-sensor-proxy 3.9-1` was active and
+`monitor-sensor --light` discovered the sensor without manual service startup.
+Fresh desktop-interface readings were 119 lux before covering, 66–67 lux while
+the owner covered the sensor, and 104–105 lux after uncovering. Initial cached
+property values were excluded. This confirms response to changing light after
+reboot, not calibrated accuracy or system suspend recovery.
+
+The optional Omarchy package now has an automatic-brightness candidate tracked
+in [downstream #1](https://github.com/standardagents/t1bridge-omarchy/issues/1).
+Its policy and package lifecycle tests pass; live adjustment acceptance remains
+pending. Neither this candidate nor the core dependency change is published yet.
