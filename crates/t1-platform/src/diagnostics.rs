@@ -43,7 +43,7 @@ labels!(Stage {
     Frame => "frame", RendererConnect => "renderer-connect",
     RendererProtocol => "renderer-protocol", ProviderAction => "provider-action",
     ProviderStatus => "provider-status", Match => "match", Delete => "delete",
-    List => "list", SepLease => "sep-lease", Limit => "limit",
+    List => "list", SepLease => "sep-lease", SepCleanup => "sep-cleanup", Limit => "limit",
     KeystoreReply => "keystore-reply", KeystoreOuter => "keystore-outer",
     KeystoreInner => "keystore-inner",
     Overlay => "overlay", OverlayPress => "overlay-press", TouchIdCancel => "touchid-cancel",
@@ -224,6 +224,30 @@ pub fn native(component: Component, stage: Stage, code: i32) {
     ));
 }
 
+/// Reports bounded native cleanup separately from a preserved primary failure.
+#[cfg(feature = "sep-operation")]
+pub(crate) fn sep_cleanup(status: i32) {
+    if let Some(record) = cleanup_record(status) {
+        emit(record);
+    }
+}
+
+#[cfg(any(feature = "sep-operation", test))]
+fn cleanup_record(status: i32) -> Option<Record> {
+    matches!(status, 0 | -109).then(|| {
+        Record::new(
+            Component::Sep,
+            Stage::SepCleanup,
+            if status == 0 {
+                Outcome::Ok
+            } else {
+                Outcome::Error
+            },
+            Some(i64::from(status)),
+        )
+    })
+}
+
 /// Preserves native reply status without reading keybag handles or payloads.
 #[cfg(feature = "sep-operation")]
 pub(crate) fn keystore_reply(selector: u8, status: i32, outer: i8, inner: i32) {
@@ -260,6 +284,21 @@ fn keystore_records(selector: u8, status: i32, outer: i8, inner: i32) -> [Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_records_only_report_the_allowlisted_outcome() {
+        for (status, outcome) in [(0, "ok"), (-109, "error")] {
+            assert_eq!(
+                cleanup_record(status).unwrap().to_string(),
+                format!(
+                    "t1bridge-diagnostic v=1 component=sep phase=sep-cleanup result={outcome} code={status} command=none"
+                )
+            );
+        }
+        for unknown in [1, -103, i32::MIN, i32::MAX] {
+            assert!(cleanup_record(unknown).is_none());
+        }
+    }
 
     #[test]
     fn keystore_status_never_invents_absent_remote_fields() {

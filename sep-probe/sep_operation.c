@@ -15,6 +15,17 @@
 #include <time.h>
 #include <unistd.h>
 
+static _Thread_local sep_operation_cleanup_observer cleanup_observer;
+
+sep_operation_cleanup_observer sep_operation_set_cleanup_observer(
+	sep_operation_cleanup_observer observer)
+{
+	sep_operation_cleanup_observer previous = cleanup_observer;
+
+	cleanup_observer = observer;
+	return previous;
+}
+
 struct sep_operation {
 	const struct sep_operation_ops *ops;
 	sep_operation_cancelled cancelled;
@@ -616,9 +627,12 @@ cleanup:
 			finalizer(finalizer_context);
 		if (!close_operation_lock(&operation))
 			clean = false;
+		if (cleanup_observer)
+			cleanup_observer(clean ? SEP_OPERATION_OK :
+					 SEP_OPERATION_ERROR_TEARDOWN);
 		if (!clean &&
-	    (result == SEP_OPERATION_OK ||
-	     result == SEP_OPERATION_ERROR_CANCELLED))
+		    (result == SEP_OPERATION_OK ||
+		     result == SEP_OPERATION_ERROR_CANCELLED))
 			result = SEP_OPERATION_ERROR_TEARDOWN;
 	}
 	return result;

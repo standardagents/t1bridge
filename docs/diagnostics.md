@@ -122,6 +122,22 @@ No new requests, retries or resets are added. The observer runs only during the
 relay's synchronous native call and shares the process-wide 4096-record limit.
 This additional evidence is not present in v0.1.6 or earlier packages.
 
+Development source after v0.1.9 adds `component=sep phase=sep-cleanup` for the
+relay and broker's native operation owners. Code `0` means cleanup of resources
+owned by that operation reported no error; it can also mean no native resource
+had been acquired. Code `-109` means ACM deletion, session destruction, descriptor
+closure or lock closure reported a teardown failure. The record appears after
+cleanup, independently of the final operation result. A primary remote error
+such as `1` remains the return value even if cleanup also fails; successful or
+cancelled operations still return `-109` when teardown fails.
+
+Keep this cleanup record beside the failing keystore reply and final lease
+result. It closes a diagnostic gap where an earlier failure could hide teardown
+failure. It does not expose handles, identify a resource leak, prove that firmware
+released transient keybag state, or fix the sustained restart loop. The observer
+adds no exchanges or retries, is disabled by default, and shares the existing
+record limit. These records are not present in the v0.1.9 package.
+
 ## Coverage and format
 
 | Component | Recorded boundaries |

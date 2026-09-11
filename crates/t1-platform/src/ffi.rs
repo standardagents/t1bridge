@@ -28,6 +28,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "sep-operation")]
 type RawKeystoreObserver = unsafe extern "C" fn(u8, c_int, i8, i32);
+#[cfg(feature = "sep-operation")]
+type RawSepCleanupObserver = unsafe extern "C" fn(c_int);
 
 #[cfg(any(feature = "frame-memfd", feature = "seqpacket"))]
 use std::os::fd::AsRawFd;
@@ -230,6 +232,11 @@ unsafe extern "C" {
         ready: Option<RawSepReadyCallback>,
         ready_context: *mut c_void,
     ) -> c_int;
+
+    #[cfg(feature = "sep-operation")]
+    fn sep_operation_set_cleanup_observer(
+        observer: Option<RawSepCleanupObserver>,
+    ) -> Option<RawSepCleanupObserver>;
 
     #[cfg(feature = "sep-operation")]
     fn sep_session_set_keystore_observer(
@@ -670,6 +677,7 @@ pub(super) fn run_sep_authorized<F, T>(
 where
     F: FnOnce(&[u8; 16]) -> T,
 {
+    let _cleanup_observer = SepCleanupObservation::install(crate::diagnostics::enabled());
     let mut state = SepCallbackState {
         callback: Some(callback),
         output: None,
@@ -744,6 +752,7 @@ pub(super) fn run_sep_keybag<F, T>(
 where
     F: FnOnce(c_int, &[u8; 16]) -> T,
 {
+    let _cleanup_observer = SepCleanupObservation::install(crate::diagnostics::enabled());
     let mut state = SepCallbackState {
         callback: Some(callback),
         output: None,
@@ -905,6 +914,7 @@ where
     Prepare: FnOnce() -> Result<Prepared, PreparationError>,
     Operation: FnOnce(&mut Prepared, c_int, &[u8; 16]) -> Output,
 {
+    let _cleanup_observer = SepCleanupObservation::install(crate::diagnostics::enabled());
     let mut state: SepPreparedKeybagState<Prepare, Operation, Prepared, PreparationError, Output> =
         SepPreparedKeybagState {
             prepare: Some(prepare),
@@ -1012,6 +1022,34 @@ where
 }
 
 #[cfg(feature = "sep-operation")]
+struct SepCleanupObservation(Option<RawSepCleanupObserver>);
+
+#[cfg(feature = "sep-operation")]
+impl SepCleanupObservation {
+    fn install(enabled: bool) -> Self {
+        // SAFETY: a synchronous, thread-local, scalar-only hook; Drop restores
+        // the previous hook on return or deferred Rust callback unwinding.
+        Self(unsafe { sep_operation_set_cleanup_observer(enabled.then_some(observe_sep_cleanup)) })
+    }
+}
+
+#[cfg(feature = "sep-operation")]
+impl Drop for SepCleanupObservation {
+    fn drop(&mut self) {
+        // SAFETY: restore only the hook saved on this native caller's thread.
+        unsafe { sep_operation_set_cleanup_observer(self.0) };
+    }
+}
+
+#[cfg(feature = "sep-operation")]
+unsafe extern "C" fn observe_sep_cleanup(status: c_int) {
+    // Never unwind across C or let diagnostics change an operation's result.
+    let _ = std::panic::catch_unwind(|| {
+        crate::diagnostics::sep_cleanup(status);
+    });
+}
+
+#[cfg(feature = "sep-operation")]
 unsafe extern "C" fn observe_keystore_reply(selector: u8, status: c_int, outer: i8, inner: i32) {
     // Diagnostics cannot unwind across C or change the operation's result.
     let _ = std::panic::catch_unwind(|| {
@@ -1030,6 +1068,7 @@ where
     C: Fn() -> bool,
     F: FnOnce() -> bool,
 {
+    let _cleanup_observer = SepCleanupObservation::install(crate::diagnostics::enabled());
     let mut state = SepRelayCallbackState {
         cancellation,
         ready: Some(ready),
@@ -1915,5 +1954,73 @@ mod keystore_observer_tests {
             restored.unwrap(),
             sentinel as RawKeystoreObserver
         ));
+    }
+}
+
+#[cfg(all(test, feature = "sep-operation"))]
+mod cleanup_observer_tests {
+    use super::*;
+
+    unsafe extern "C" fn sentinel(_: c_int) {}
+
+    fn assert_sentinel_installed() {
+        // SAFETY: inspect and restore this test thread's scalar-only callback.
+        let current = unsafe { sep_operation_set_cleanup_observer(None) };
+        unsafe { sep_operation_set_cleanup_observer(current) };
+        assert!(std::ptr::fn_addr_eq(
+            current.unwrap(),
+            sentinel as RawSepCleanupObserver
+        ));
+    }
+
+    #[test]
+    fn every_native_owner_restores_the_thread_local_cleanup_observer() {
+        // SAFETY: the hook is static and thread-local; cancellation prevents I/O.
+        let original = unsafe { sep_operation_set_cleanup_observer(Some(sentinel)) };
+        assert!(
+            std::thread::spawn(|| unsafe { sep_operation_set_cleanup_observer(None).is_none() })
+                .join()
+                .unwrap()
+        );
+        let cancelled = AtomicBool::new(true);
+        assert_eq!(run_sep_authorized(100, 1000, &cancelled, |_| ()).0, -103);
+        assert_sentinel_installed();
+        assert_eq!(run_sep_keybag(0, 0, 100, &cancelled, |_, _| ()).0, -103);
+        assert_sentinel_installed();
+        assert_eq!(
+            run_sep_prepared_keybag(0, 0, 100, &cancelled, || Ok::<_, ()>(()), |(), _, _| ()).0,
+            -103
+        );
+        assert_sentinel_installed();
+        assert_eq!(
+            run_sep_notification_relay(100, 25, &|| true, || true).0,
+            -103
+        );
+        assert_sentinel_installed();
+        unsafe { sep_operation_set_cleanup_observer(original) };
+    }
+
+    #[test]
+    fn disabled_observation_and_unwinding_restore_nested_hooks() {
+        // SAFETY: hooks are scalar-only, thread-local, and restored below.
+        let original = unsafe { sep_operation_set_cleanup_observer(Some(sentinel)) };
+        {
+            let _disabled = SepCleanupObservation::install(false);
+            assert!(unsafe { sep_operation_set_cleanup_observer(None).is_none() });
+        }
+        assert_sentinel_installed();
+        let result = std::panic::catch_unwind(|| {
+            let _enabled = SepCleanupObservation::install(true);
+            let current = unsafe { sep_operation_set_cleanup_observer(None) };
+            unsafe { sep_operation_set_cleanup_observer(current) };
+            assert!(std::ptr::fn_addr_eq(
+                current.unwrap(),
+                observe_sep_cleanup as RawSepCleanupObserver
+            ));
+            panic!("synthetic callback unwind");
+        });
+        assert!(result.is_err());
+        assert_sentinel_installed();
+        unsafe { sep_operation_set_cleanup_observer(original) };
     }
 }

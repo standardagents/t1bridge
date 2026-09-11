@@ -1888,6 +1888,53 @@ static void test_session_transfer_cannot_extend_the_deadline(void)
 	       callback.calls == 0 && fake.destroy_calls == 1);
 }
 
+static int observed_cleanup_result;
+static unsigned int observed_cleanup_calls;
+
+static void observe_cleanup(int result)
+{
+	observed_cleanup_result = result;
+	observed_cleanup_calls++;
+}
+
+static void test_cleanup_observation_preserves_primary_result(void)
+{
+	const enum sep_operation_result results[] = {
+		SEP_OPERATION_OK, SEP_OPERATION_REMOTE_ERROR,
+		SEP_OPERATION_ERROR_ACM, SEP_OPERATION_ERROR_CANCELLED,
+	};
+	sep_operation_cleanup_observer previous;
+	size_t index;
+	int failure;
+
+	previous = sep_operation_set_cleanup_observer(observe_cleanup);
+	for (index = 0; index < sizeof(results) / sizeof(results[0]); ++index) {
+		for (failure = 0; failure < 5; ++failure) {
+			struct fake_operation fake = make_fake();
+			struct callback_state callback = {
+				.result = results[index], .initialize_acm = 1,
+			};
+			enum sep_operation_result expected = results[index];
+
+			fake.delete_exchange_fails = failure == 1;
+			fake.destroy_fails = failure == 2;
+			fake.close_fails_for = failure == 3 ? 80 :
+					       failure == 4 ? 70 : -1;
+			if (failure && (expected == SEP_OPERATION_OK ||
+					expected == SEP_OPERATION_ERROR_CANCELLED))
+				expected = SEP_OPERATION_ERROR_TEARDOWN;
+			observed_cleanup_calls = 0;
+			EXPECT(run_fake(&fake, 1000, &callback) == expected);
+			EXPECT(callback.acm_succeeded && fake.delete_exchange_calls == 1);
+			EXPECT(fake.destroy_calls == 1 && fake.close_calls == 2);
+			EXPECT(observed_cleanup_calls == 1);
+			EXPECT(observed_cleanup_result == (failure ?
+				SEP_OPERATION_ERROR_TEARDOWN : SEP_OPERATION_OK));
+		}
+	}
+	EXPECT(sep_operation_set_cleanup_observer(previous) == observe_cleanup);
+}
+
 static void test_primary_errors_survive_cleanup_failure(void)
 {
 	struct fake_operation fake = make_fake();
@@ -2060,6 +2107,7 @@ int main(void)
 	test_lock_wait_uses_the_operation_deadline();
 	test_cancellation_is_owned_before_and_after_callback();
 	test_session_transfer_cannot_extend_the_deadline();
+	test_cleanup_observation_preserves_primary_result();
 	test_primary_errors_survive_cleanup_failure();
 	test_acm_context_teardown_obeys_result_deadline_and_cancellation();
 	test_consumer_lease_gets_a_fresh_bounded_cleanup_deadline();

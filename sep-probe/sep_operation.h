@@ -47,6 +47,16 @@ typedef int (*sep_operation_credential_callback)(
 	const uint8_t credential[SEP_ACM_EXTERNAL_FORM_SIZE],
 	size_t credential_length);
 
+/*
+ * Optional synchronous, thread-local cleanup observation. Receives only OK or
+ * ERROR_TEARDOWN after owned resources and the lock have been closed. It must
+ * not reenter native operations or unwind. The setter returns the prior hook.
+ * The operation's primary result and teardown precedence remain unchanged.
+ */
+typedef void (*sep_operation_cleanup_observer)(int result);
+sep_operation_cleanup_observer sep_operation_set_cleanup_observer(
+	sep_operation_cleanup_observer observer);
+
 /* Focused syscall/session seam for deterministic native tests. */
 struct sep_operation_ops {
 	void *context;
