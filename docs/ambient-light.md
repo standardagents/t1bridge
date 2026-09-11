@@ -8,8 +8,7 @@ place: replacing the configuration-2 stack can disrupt the other T1 functions.
 
 ## Desktop discovery
 
-The next core package adds `iio-sensor-proxy` as a required dependency. This
-change is not yet in the published v0.1.7 package. The distribution proxy owns
+Starting with v0.1.8, the core package requires `iio-sensor-proxy`. The distribution proxy owns
 its udev discovery rules, service activation and the system D-Bus interface
 `net.hadess.SensorProxy`. T1Bridge needs no additional service, socket, fixed
 device path or module-loading rule for the observed sensor.
@@ -58,7 +57,28 @@ the owner covered the sensor, and 104–105 lux after uncovering. Initial cached
 property values were excluded. This confirms response to changing light after
 reboot, not calibrated accuracy or system suspend recovery.
 
-The optional Omarchy package now has an automatic-brightness candidate tracked
-in [downstream #1](https://github.com/standardagents/t1bridge-omarchy/issues/1).
-Its policy and package lifecycle tests pass; live adjustment acceptance remains
-pending. Neither this candidate nor the core dependency change is published yet.
+The optional `t1bridge-omarchy` package supplies automatic panel brightness.
+Install it from the signed repository, then enable the user preference:
+
+```sh
+sudo pacman -Syu t1bridge-omarchy
+systemctl --user enable --now t1bridge-auto-brightness.service
+```
+
+Disable it with `systemctl --user disable --now t1bridge-auto-brightness.service`.
+It adopts current brightness at startup, moves gradually with light changes,
+and adopts manual adjustments as a new reference with a 30-second hold.
+It does not persist that reference across reboot or change keyboard brightness.
+
+On the tested machine, attended measurements confirmed 25–26 lux and 58–59%
+brightness while covered, recovering to 75–78 lux and 73–74% uncovered.
+A manual 100% setting remained at 100% after 40 seconds with steady light.
+After a reported lock/unlock cycle, brightness was still 100%, fresh sensor
+reports continued and the service had no restarts. The locked interval itself
+was not observed. After another reboot, the enabled service started at graphical
+login without manual intervention and had no restarts.
+
+These checks establish the tested local behavior. Other models, concurrent
+camera/authentication operation, and the locked interval still need specific
+acceptance evidence. Source and package recipes are available alongside the
+[signed downloads](https://linux.standardagents.ai/arch/standardagents/x86_64/PRERELEASE.md).
