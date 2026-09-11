@@ -140,7 +140,7 @@ impl Drop for OverlayTeardown<'_> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LiveStandardFailure {
+pub(crate) enum LiveStandardFailure {
     Cancelled,
     CapacityFull,
     DeviceLost,
@@ -326,7 +326,9 @@ fn run_live_enroll(
 
     let result = with_standard_cancellation(active, environment.interface, |cancellation| {
         diagnostics::observe(Component::Broker, Phase::Relay, || {
-            prepare_enrollment_relay(&mut relay, cancellation.sep())
+            prepare_enrollment_relay(&mut relay, || {
+                bootstrap_enrollment_keybag(cancellation.sep())
+            })
         })?;
         if standard_operation_cancelled(active, cancellation) {
             return Err(LiveStandardFailure::Cancelled);
@@ -840,20 +842,26 @@ fn revalidate_and_claim_owner(
     claim_enrollment_owner(pair_store, owner_store, owner).map_err(|_| LiveStandardFailure::Error)
 }
 
-fn prepare_enrollment_relay(
-    relay: &mut SystemctlKeybagRelay,
-    cancellation: &SepCancellation,
+fn bootstrap_enrollment_keybag(cancellation: &SepCancellation) -> Result<(), LiveStandardFailure> {
+    bootstrap_keybag(SEP_OPERATION_TIMEOUT, cancellation)
+        .map(|_| ())
+        .map_err(|_| {
+            if cancellation.is_cancelled() {
+                LiveStandardFailure::Cancelled
+            } else {
+                LiveStandardFailure::Error
+            }
+        })
+}
+
+pub(crate) fn prepare_enrollment_relay(
+    relay: &mut impl KeybagRelayControl,
+    bootstrap: impl FnOnce() -> Result<(), LiveStandardFailure>,
 ) -> Result<(), LiveStandardFailure> {
     if relay.is_active().map_err(|_| LiveStandardFailure::Error)? {
         return Ok(());
     }
-    bootstrap_keybag(SEP_OPERATION_TIMEOUT, cancellation).map_err(|_| {
-        if cancellation.is_cancelled() {
-            LiveStandardFailure::Cancelled
-        } else {
-            LiveStandardFailure::Error
-        }
-    })?;
+    bootstrap()?;
     relay.start().map_err(|_| LiveStandardFailure::Error)?;
     if relay.is_active().map_err(|_| LiveStandardFailure::Error)? {
         Ok(())

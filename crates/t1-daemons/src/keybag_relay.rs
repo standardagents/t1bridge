@@ -98,28 +98,30 @@ impl<Runner: CommandRunner> RelayControl<Runner> {
     fn is_active(&mut self) -> Result<bool, KeybagRelayError> {
         let deadline = self.deadline()?;
         self.query(deadline)
+            .map(|state| state == ServiceState::Active)
     }
 
     fn transition(&mut self, action: ServiceAction) -> Result<(), KeybagRelayError> {
         let deadline = self.deadline()?;
         let action_result = self.runner.run(action.invocation(), deadline)?;
-        let active = self.query(deadline)?;
+        let state = self.query(deadline)?;
         if !action_result.exit.success() {
             return Err(KeybagRelayError::UnexpectedExit);
         }
-        if active != action.expected_active() {
+        if state != action.expected_state() {
             return Err(KeybagRelayError::VerificationFailed);
         }
         Ok(())
     }
 
-    fn query(&mut self, deadline: Instant) -> Result<bool, KeybagRelayError> {
+    fn query(&mut self, deadline: Instant) -> Result<ServiceState, KeybagRelayError> {
         let result = self
             .runner
             .run(ServiceAction::Query.invocation(), deadline)?;
         match (result.exit, result.stdout.as_slice()) {
-            (CommandExit::Code(0), b"active\n") => Ok(true),
-            (CommandExit::Code(3), b"inactive\n") => Ok(false),
+            (CommandExit::Code(0), b"active\n") => Ok(ServiceState::Active),
+            (CommandExit::Code(3), b"inactive\n") => Ok(ServiceState::Inactive),
+            (CommandExit::Code(3), b"failed\n") => Ok(ServiceState::Failed),
             _ => Err(KeybagRelayError::UnknownState),
         }
     }
@@ -129,6 +131,29 @@ impl<Runner: CommandRunner> RelayControl<Runner> {
             .checked_add(self.timeout)
             .ok_or(KeybagRelayError::InvalidTimeout)
     }
+}
+
+impl<Runner: CommandRunner> KeybagRelayControl for RelayControl<Runner> {
+    type Error = KeybagRelayError;
+
+    fn is_active(&mut self) -> Result<bool, Self::Error> {
+        Self::is_active(self)
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.transition(ServiceAction::Stop)
+    }
+
+    fn start(&mut self) -> Result<(), Self::Error> {
+        self.transition(ServiceAction::Start)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServiceState {
+    Active,
+    Inactive,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,10 +184,10 @@ impl ServiceAction {
         }
     }
 
-    const fn expected_active(self) -> bool {
+    const fn expected_state(self) -> ServiceState {
         match self {
-            Self::Start => true,
-            Self::Stop | Self::Query => false,
+            Self::Start => ServiceState::Active,
+            Self::Stop | Self::Query => ServiceState::Inactive,
         }
     }
 }
@@ -449,14 +474,20 @@ mod tests {
     }
 
     #[test]
-    fn health_accepts_only_exact_active_and_inactive_results() {
+    fn health_accepts_only_exact_active_inactive_and_failed_results() {
         let mut active_control = control([Ok(active())]);
         assert_eq!(active_control.is_active(), Ok(true));
         let mut inactive_control = control([Ok(inactive())]);
         assert_eq!(inactive_control.is_active(), Ok(false));
+        let mut failed_control = control([Ok(result(CommandExit::Code(3), b"failed\n"))]);
+        assert_eq!(failed_control.is_active(), Ok(false));
 
         for outcome in [
-            result(CommandExit::Code(3), b"failed\n"),
+            result(CommandExit::Code(0), b"failed\n"),
+            result(CommandExit::Code(4), b"failed\n"),
+            result(CommandExit::Code(3), b"failed"),
+            result(CommandExit::Code(3), b"failed\nactive\n"),
+            result(CommandExit::Code(3), b"active\n"),
             result(CommandExit::Code(3), b"activating\n"),
             result(CommandExit::Code(3), b"deactivating\n"),
             result(CommandExit::Code(4), b"unknown\n"),
@@ -507,6 +538,84 @@ mod tests {
             stop.transition(ServiceAction::Stop),
             Err(KeybagRelayError::VerificationFailed)
         );
+        // A stopped failure permits recovery, but is not a successful transition.
+        for action in [ServiceAction::Start, ServiceAction::Stop] {
+            let mut failed = control([
+                Ok(action_ok()),
+                Ok(result(CommandExit::Code(3), b"failed\n")),
+            ]);
+            assert_eq!(
+                failed.transition(action),
+                Err(KeybagRelayError::VerificationFailed)
+            );
+        }
+    }
+
+    #[cfg(feature = "auth-broker-service")]
+    #[test]
+    fn enrollment_recovers_a_failed_relay_only_after_bootstrap_and_verified_start() {
+        use crate::live_standard_fingerprint::prepare_enrollment_relay;
+
+        let mut relay = control([
+            Ok(result(CommandExit::Code(3), b"failed\n")),
+            Ok(action_ok()),
+            Ok(active()),
+            Ok(active()),
+        ]);
+        let mut bootstrapped = false;
+        prepare_enrollment_relay(&mut relay, || {
+            bootstrapped = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(bootstrapped);
+        assert_eq!(
+            relay
+                .runner
+                .calls
+                .iter()
+                .map(|call| call.invocation.args)
+                .collect::<Vec<_>>(),
+            [IS_ACTIVE_ARGS, START_ARGS, IS_ACTIVE_ARGS, IS_ACTIVE_ARGS]
+        );
+    }
+
+    #[cfg(feature = "auth-broker-service")]
+    #[test]
+    fn enrollment_does_not_hide_bootstrap_restart_or_state_failures() {
+        use crate::live_standard_fingerprint::{LiveStandardFailure, prepare_enrollment_relay};
+
+        let mut relay = control([Ok(result(CommandExit::Code(3), b"failed\n"))]);
+        assert_eq!(
+            prepare_enrollment_relay(&mut relay, || Err(LiveStandardFailure::Cancelled)),
+            Err(LiveStandardFailure::Cancelled)
+        );
+        assert_eq!(relay.runner.calls.len(), 1);
+
+        for start in [action_ok(), result(CommandExit::Code(1), b"")] {
+            let mut relay = control([
+                Ok(result(CommandExit::Code(3), b"failed\n")),
+                Ok(start),
+                Ok(result(CommandExit::Code(3), b"failed\n")),
+            ]);
+            assert_eq!(
+                prepare_enrollment_relay(&mut relay, || Ok(())),
+                Err(LiveStandardFailure::Error)
+            );
+            assert_eq!(relay.runner.calls.len(), 3);
+        }
+
+        for state in [b"activating\n".as_slice(), b"deactivating\n", b"unknown\n"] {
+            let mut relay = control([Ok(result(CommandExit::Code(3), state))]);
+            assert_eq!(
+                prepare_enrollment_relay(&mut relay, || panic!("must not bootstrap unknown state")),
+                Err(LiveStandardFailure::Error)
+            );
+            assert_eq!(relay.runner.calls.len(), 1);
+        }
+        let mut relay = control([Ok(active())]);
+        prepare_enrollment_relay(&mut relay, || panic!("active relay needs no bootstrap")).unwrap();
+        assert_eq!(relay.runner.calls.len(), 1);
     }
 
     #[test]
