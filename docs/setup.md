@@ -74,6 +74,26 @@ The keybag relay starts when protected state exists; do not enable it as an
 unconditional boot service. A new installation can legitimately show no
 keybag before its first enrollment. See the [startup diagram](touch-id.md).
 
+### Installing while the T1 is already running
+
+An already-booted T1 may remain in USB configuration 1 after package
+installation. Reboot remains the supported handoff to the packaged early
+configuration selector. The new login also picks up `t1bridge` group membership;
+re-enumerating USB alone cannot refresh an existing graphical session's groups.
+
+Two successful no-reboot handoffs were [reported on MacBookPro14,3](https://github.com/standardagents/t1bridge/issues/22)
+after explicitly deauthorizing and reauthorizing an idle T1. That observation
+does not yet establish a supported installation command. The existing
+`t1bridge validate usb-cycle` is a development validation tool: it requires
+configuration 2, `t1bridge-cfgselector` ownership, and the expected interface
+drivers before cycling. It therefore cannot perform the configuration-1
+installation handoff, and its checks must not be weakened to make it do so.
+
+A future no-reboot handoff needs separate validation of the starting driver
+state, exclusive ownership, quiescing of all affected T1 clients, recovery on
+interruption, and configuration-2 readiness. Until that path is implemented and
+tested, complete installation with a reboot rather than raw USB toggles.
+
 ## Import this machine's Apple data
 
 With the matching preserved Apple EFI partition attached:
