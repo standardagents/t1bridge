@@ -41,49 +41,92 @@ Since [v0.1.8](https://github.com/standardagents/t1bridge/releases/tag/v0.1.8),
 the public repository also contains `t1bridge-omarchy`. Publishing the CI
 indexes directly would remove that package from discovery.
 
-Until the guarded publisher in [#24](https://github.com/standardagents/t1bridge/issues/24)
-is implemented, publication requires one maintainer to coordinate an exclusive
-publication window and retain a resumable local staging directory:
+Use the maintainer-only `t1-release` Rust tool. It is a workspace member so
+`make quality` checks it, but runtime packages do not install it. It requires
+`git`, `gh`, `curl`, Wrangler, GnuPG, `bsdtar`, `repo-add`, and `vercmp`.
+Authenticate GitHub and Wrangler beforehand. The tool obtains a short-lived
+Wrangler token in memory; it never stores credentials in staging or argv.
+Use the existing signing wrapper rather than exporting a private key.
 
-1. Obtain the current database, files index, checksum manifest and their
-   signatures. Verify them against the pinned release key from the
-   [installation instructions](../README.md#1-trust-the-signing-key), and
-   retain the original bytes as the publication baseline. Inventory every
-   current package name, version and artifact, including optional packages.
-2. Copy that complete verified repository into staging and merge only the
-   intended package updates using `repo-add --include-sigs`. Retain unrelated
-   entries and previously published immutable artifacts. Compare the resulting
-   inventory with the baseline; stop on any unexpected removal or downgrade.
-3. Sign the complete database and files index through the existing signing
-   boundary. Assemble the matching source archives, recipes and patches,
-   retaining the optional package's public build inputs. Regenerate and sign
-   the complete `SHA256SUMS` manifest and verify every signature locally.
-4. Upload new immutable package, signature and versioned source objects before
-   changing public indexes. Use origin object metadata for collision checks;
-   do not preflight absent download URLs through the CDN. A cached 404 can
-   outlive an upload. Never replace different bytes at an existing immutable
-   filename.
-5. Download the uploaded immutable objects anonymously and compare their bytes,
-   checksums and pinned-key signatures with staging. A missing object or cached
-   404 stops publication. Retain staging and resume verification after the
-   objects become available; do not rebuild or rename artifacts to bypass it.
-6. Recheck the current indexes at the origin against the retained baseline
-   before replacing mutable indexes and manifests. Stop if another publication
-   changed them. This manual check depends on the exclusive publication window;
-   it is not an atomic concurrency guard.
-7. Publish the combined indexes, matching signatures and manifests. Verify the
-   anonymous repository view, every referenced package and the complete
-   inventory, including packages outside the core update. Keep the GitHub draft
-   open if any check fails.
-8. Replace the draft's candidate indexes and manifests with the verified
-   combined set and include the retained optional package's matching assets.
-   Verify GitHub downloads against the same staging manifest before publishing
-   the release page. Record exact versions, checks and remaining validation.
+1. Download the signed CI draft into a candidate directory with
+   `gh release download TAG --repo standardagents/t1bridge --dir CANDIDATE`.
+   Add any intended optional package update, its detached signature and matching
+   public source archive/recipe to that directory. Packages must already have
+   passed their build/install checks. The publisher never rebuilds packages.
+2. Create a private configuration file outside the checkout:
 
-The v0.1.8 publication verified five package entries, 31 public artifacts and
-eight signatures. Those counts describe that release, not a fixed inventory
-for future releases. Automated concurrency, failure and resume checks remain
-open in #24; this procedure does not establish that automation as complete.
+   ```json
+   {
+     "account": "CLOUDFLARE_ACCOUNT_ID",
+     "bucket": "standardagents-linux-packages",
+     "prefix": "arch/standardagents/x86_64/",
+     "public_url": "https://linux.standardagents.ai/arch/standardagents/x86_64/",
+     "repository": "standardagents/t1bridge",
+     "tag": "vVERSION",
+     "checkout": "/absolute/path/to/checkout",
+     "keyring": "/secure/signing/public-keyring.kbx",
+     "primary_fingerprint": "35B166F78B063B04DE1E3D913E6C4216EB03D371",
+     "signing_fingerprint": "D3FC53C0DF306FD52332B34426F1223CF81289C4",
+     "signer": "/secure/signing/gpg-release",
+     "notes_file": "/private/release/notes.md"
+   }
+   ```
+
+   Replace the placeholders with the release's actual values. The signer accepts
+   GPG command-line arguments and must handle any key unlock through the existing
+   signing boundary. No credentials belong in this configuration. Put an updated
+   `PRERELEASE.md` in the candidate directory when updating the public setup guide.
+3. Run `cargo run --locked -p t1-release -- prepare CONFIG CANDIDATE NEW_STAGE`.
+   Review the resulting `state.json`, package inventory, `assets/` and `notes.md`.
+   Preparation downloads and verifies the current signed manifest, both indexes
+   and every package against the pinned key. It merges by package name, retains
+   unrelated entries, rejects downgrades and changed bytes at the same version,
+   and builds/signs the complete indexes and checksum manifests. Old versioned
+   source archives remain in the complete manifest; replaced package files remain
+   untouched at the origin. Preparation makes no remote writes.
+4. Run `cargo run --locked -p t1-release -- publish STAGE`. The tool verifies
+   staging, acquires the repository publication lock, compares the origin with
+   the retained baseline, uploads immutable artifacts and verifies their public
+   bytes before updating indexes. It checks the complete anonymous repository,
+   synchronizes and verifies the GitHub draft against the same manifest, then
+   publishes the prerelease and releases the lock.
+
+### Conflicts and interrupted publication
+
+The atomic Git ref `refs/heads/t1bridge-publication-lock` serializes publishers.
+Its commit identifies the staged plan and operation, with no credentials or
+machine data. An exclusive local file lock prevents concurrent use of the same
+staging directory. Every publisher must use this tool; direct R2 writes do not
+participate in the cooperative lock. Origin baseline checks detect changes
+before the index transition, but do not make unrelated out-of-band writes safe.
+Do not copy an active staging directory between machines.
+
+If an upload, public download or GitHub operation fails, keep the staging
+contents and remote lock. Run the same `publish STAGE` command again. It reuses
+exact artifact bytes, verifies already-uploaded immutable objects and accepts
+only the recorded baseline or this operation's intended mutable bytes during
+resume. It never probes absent immutable CDN URLs before upload. Cached 404s or
+stale bytes stop completion; wait for availability and resume without rebuilding,
+renaming artifacts, or adding cache-purge permissions.
+
+A competing lock or unexpected origin index stops publication. Investigate the
+other operation before proceeding; do not force-delete its lock or edit an
+active stage to bypass validation. For an abandoned operation, first establish
+that no process can still write, inspect its durable state and the actual origin,
+then explicitly recover its lock with a compare-and-delete Git lease. If index
+publication began, prefer completing that original stage before preparing a new
+release. The tool never automatically discards a lock or staging artifacts.
+
+R2 cannot atomically replace all database/signature/manifest objects together.
+There can be a brief interval when clients reject mismatched signatures; immutable
+packages are verified first, and completion waits for a fully consistent public
+view. A failure during that interval requires resuming the retained stage.
+
+`make quality` covers package addition/upgrade with unrelated entries, immutable
+collisions, changed origin indexes, cached 404s, interrupted uploads/index writes,
+resume without reupload, and real Git lock conflicts and conditional deletion.
+The publication itself verifies exact package metadata, inventories, checksums
+and signatures across staging, R2 and GitHub.
 
 ## Key custody and rotation
 

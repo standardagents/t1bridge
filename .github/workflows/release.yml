@@ -48,7 +48,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          pacman -S --noconfirm --needed dkms linux-headers pam pkgconf rust sudo xz
+          pacman -S --noconfirm --needed dkms linux-headers pam pkgconf rust sudo xz gnupg pacman-contrib
           install -d -m 0755 /run/systemd
 
       - name: Verify release input

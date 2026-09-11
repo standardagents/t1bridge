@@ -7,6 +7,7 @@ members = [
     "crates/t1-platform",
     "crates/t1-touchbar-hw",
     "crates/t1-touchbar",
+    "tools/release",
 ]
 
 [workspace.package]

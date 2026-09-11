@@ -10,6 +10,11 @@ allow = [
     "MIT",
 ]
 
+# The maintainer publisher's derive parser uses Unicode identifier tables.
+[[licenses.exceptions]]
+name = "unicode-ident"
+allow = ["MIT", "Unicode-3.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

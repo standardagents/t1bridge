@@ -23,7 +23,7 @@ jobs:
 
       - name: Install build tools
         run: |
-          pacman -S --noconfirm --needed rust cargo-deny linux-headers
+          pacman -S --noconfirm --needed rust cargo-deny linux-headers gnupg pacman-contrib
           echo "KDIR=$(find /usr/lib/modules -mindepth 2 -maxdepth 2 -type d -name build | sort -V | tail -1)" >> "$GITHUB_ENV"
 
       - name: Run canonical quality checks

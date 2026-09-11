@@ -80,3 +80,15 @@ confirmed the kernel-module relationships listed above.
 The minimum-Rust run, CI, dynamic-link inspection, DKMS build logs, package
 manifests, and hardware observations establish the matrix above. An untested
 version or operation is not covered by those observations.
+
+## Maintainer publication tool
+
+The workspace-only `t1-release` binary uses `serde`/`serde_json` for durable
+publication state and API responses, `sha2` for artifact checksums and `fs2`
+for a local process lock. These dependencies are not linked into installed
+T1Bridge services. Publication also uses Git, GitHub CLI, curl, Wrangler,
+GnuPG, libarchive tools and pacman repository/version utilities; see
+[the release procedure](releasing.md).
+The `unicode-ident` table dependency additionally carries Unicode-3.0 terms;
+`deny.toml` allows that license only for that crate. Runtime services remain
+outside this dependency graph.

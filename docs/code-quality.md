@@ -11,7 +11,8 @@ runs, in fast-feedback order:
 5. all DKMS modules against the selected kernel headers.
 
 The command requires the stable Rust toolchain with rustfmt and Clippy and
-`cargo-deny`, a C compiler, and kernel headers. Override `KDIR` when validating
+`cargo-deny`, a C compiler, kernel headers, Git, GnuPG, libarchive tools and
+pacman-contrib for the publication boundary tests. Override `KDIR` when validating
 against headers other than the running kernel. It is non-interactive and does
 not modify tracked files.
 
