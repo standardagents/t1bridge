@@ -383,17 +383,29 @@ Every invocation begins with the arguments `v1` and one fixed operation:
 | `show-keyboard-backlight` | none | Show desktop feedback for the current keyboard-backlight level. |
 | `notify-renderer-fallback` | `selection-unavailable` or `selection-exited` | Report the one automatic fallback event. |
 
-`status` writes one ASCII record with five whitespace-separated fields:
+`status` writes one ASCII record with five whitespace-separated fields, or
+six when display power is advertised:
 
 ```text
-T1BRIDGE-DESKTOP 1 CAPABILITIES VOLUME MUTED
+T1BRIDGE-DESKTOP 1 CAPABILITIES VOLUME MUTED [DISPLAY]
 ```
 
 `CAPABILITIES` is an unsigned decimal bit set: `1` audio, `2` media player
-available, `4` desktop notification, and `8` level feedback. Unknown bits reject the record. With
-audio advertised, `VOLUME` is `0` through `100` and `MUTED` is `0` or `1`.
-Without audio, both fields must be `-`. Media and notification have no extra
-state in minor zero.
+available, `4` desktop notification, `8` level feedback, and `16` display
+power. Unknown bits reject the record. With audio advertised, `VOLUME` is `0`
+through `100` and `MUTED` is `0` or `1`. Without audio, both fields must be
+`-`. Media and notification have no extra state in minor zero.
+
+With display power advertised, `DISPLAY` is `1` while the desktop shows its
+displays and `0` while it has turned them off, such as after the lock screen
+blanks. The field exists exactly when the bit is set; a five-field record with
+the bit or a sixth field without it rejects the record. Display power is minor
+one: a minor-zero renderer rejects the bit, so a provider that advertises it
+requires a renderer with this contract. While `DISPLAY` is `0` the built-in
+renderer presents a dark frame, drops contacts so nothing is pressed or typed,
+and keeps Touch ID presentation for when the display returns. Only the desktop
+turns its display back on; the Touch Bar does not wake it. A provider that
+fails or disappears withdraws the state and the panel returns to its controls.
 
 Provider stdout is limited to 128 bytes and each process receives a 500 ms
 monotonic deadline. A status record is refreshed at most once per second.

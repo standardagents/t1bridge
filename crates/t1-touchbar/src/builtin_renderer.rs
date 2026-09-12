@@ -337,6 +337,7 @@ struct RendererSession {
     hardware_capabilities: StockCapabilities,
     desktop_state: DesktopState,
     pending_desktop_state: Option<DesktopState>,
+    display_off: bool,
     levels: StockLevels,
     touch_id: TouchIdOverlay,
     overlay_state: Option<OverlayState>,
@@ -387,6 +388,7 @@ impl RendererSession {
             hardware_capabilities: capabilities,
             desktop_state: DesktopState::default(),
             pending_desktop_state: None,
+            display_off: false,
             levels: StockLevels::default(),
             touch_id,
             overlay_state: None,
@@ -468,7 +470,7 @@ impl RendererSession {
                 if envelope.request_id != 0 {
                     return Err(BuiltinRendererError::Protocol);
                 }
-                let outcome = self.input.ingest_at(&frame, self.overlay_state, self.now)?;
+                let outcome = self.observe_input(frame)?;
                 self.dirty |= outcome.redraw;
                 for action in outcome.actions {
                     self.dispatch(action, connection, provider)?;
@@ -557,6 +559,22 @@ impl RendererSession {
                 Err(BuiltinRendererError::ServiceRejected)
             }
         }
+    }
+
+    /// Feeds one hardware input frame through the interpreter.
+    ///
+    /// While the desktop display is off the panel is dark, so contacts are
+    /// dropped before interpretation: nothing is pressed, repeated, tapped, or
+    /// used to cancel Touch ID. Fn state is still tracked so the row is right
+    /// when the display returns.
+    fn observe_input(
+        &mut self,
+        mut frame: WireInputFrame,
+    ) -> Result<InputOutcome, BuiltinRendererError> {
+        if self.display_off {
+            frame.contacts.clear();
+        }
+        self.input.ingest_at(&frame, self.overlay_state, self.now)
     }
 
     fn send_keys(
@@ -721,6 +739,10 @@ impl RendererSession {
     }
 
     fn render(&mut self) -> Result<(), BuiltinRendererError> {
+        if self.display_off {
+            self.frame.as_mut_slice().fill(0);
+            return Ok(());
+        }
         let mut frame = Xrgb8888Frame::new(
             self.dimensions.width(),
             self.dimensions.height(),
@@ -862,6 +884,12 @@ impl RendererSession {
     }
 
     fn set_desktop_state(&mut self, state: DesktopState) -> Result<(), BuiltinRendererError> {
+        // Display power follows the desktop immediately, even under an active
+        // touch: a dark panel must not keep showing controls.
+        if self.display_off != state.display_off {
+            self.display_off = state.display_off;
+            self.dirty = true;
+        }
         if self.desktop_state == state && self.pending_desktop_state.is_none() {
             if self.levels.volume != state.volume || self.levels.muted != state.muted {
                 self.levels.volume = state.volume;
@@ -1363,6 +1391,7 @@ mod tests {
             capabilities: DesktopCapabilities::AUDIO | DesktopCapabilities::MEDIA,
             volume: Some(61),
             muted: true,
+            display_off: false,
         };
         session
             .set_desktop_state(state)
@@ -1405,6 +1434,7 @@ mod tests {
             capabilities: DesktopCapabilities::AUDIO,
             volume: Some(42),
             muted: false,
+            display_off: false,
         };
         session
             .set_desktop_state(state)
@@ -1434,6 +1464,7 @@ mod tests {
             capabilities: DesktopCapabilities::AUDIO,
             volume: Some(50),
             muted: false,
+            display_off: false,
         };
         session
             .set_desktop_state(state)
@@ -1450,6 +1481,75 @@ mod tests {
             .expect("apply deferred desktop state");
         assert_eq!(session.desktop_state, state);
         assert_eq!(session.pending_desktop_state, None);
+    }
+
+    #[test]
+    fn display_off_blanks_the_frame_and_drops_contacts_until_power_returns() {
+        let mut session = session();
+        session.render().expect("render stock frame");
+        let stock = session.frame.as_mut_slice().to_vec();
+        session.dirty = false;
+
+        let off = DesktopState {
+            capabilities: DesktopCapabilities::DISPLAY_POWER,
+            volume: None,
+            muted: false,
+            display_off: true,
+        };
+        session.set_desktop_state(off).expect("apply display off");
+        assert!(session.display_off);
+        assert!(session.dirty);
+        session.render().expect("render dark frame");
+        assert!(session.frame.as_mut_slice().iter().all(|byte| *byte == 0));
+
+        let outcome = session
+            .observe_input(input(1, false, vec![contact(1, 5, 10)]))
+            .expect("observe contact on dark panel");
+        assert!(outcome.actions.is_empty());
+        assert!(!outcome.cancel_touch_id);
+        assert_eq!(session.input.pressed(), None);
+        let outcome = session
+            .observe_input(input(2, false, Vec::new()))
+            .expect("observe release on dark panel");
+        assert!(outcome.actions.is_empty());
+
+        let on = DesktopState {
+            display_off: false,
+            ..off
+        };
+        session.dirty = false;
+        session.set_desktop_state(on).expect("apply display on");
+        assert!(!session.display_off);
+        assert!(session.dirty);
+        session.render().expect("render restored frame");
+        assert_eq!(session.frame.as_mut_slice(), stock);
+        session
+            .observe_input(input(3, false, vec![contact(1, 5, 10)]))
+            .expect("observe contact on lit panel");
+        assert_eq!(session.input.pressed(), Some(StockAction::Escape));
+    }
+
+    #[test]
+    fn display_power_applies_under_an_active_touch_while_layout_waits() {
+        let mut session = session();
+        session
+            .input
+            .ingest(&input(1, false, vec![contact(1, 60, 10)]), None)
+            .expect("start active touch");
+        let state = DesktopState {
+            capabilities: DesktopCapabilities::AUDIO | DesktopCapabilities::DISPLAY_POWER,
+            volume: Some(50),
+            muted: false,
+            display_off: true,
+        };
+        session
+            .set_desktop_state(state)
+            .expect("defer layout but not display power");
+        assert!(session.display_off);
+        assert_eq!(session.desktop_state, DesktopState::default());
+        assert_eq!(session.pending_desktop_state, Some(state));
+        session.render().expect("render dark frame under touch");
+        assert!(session.frame.as_mut_slice().iter().all(|byte| *byte == 0));
     }
 
     #[test]

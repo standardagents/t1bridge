@@ -49,6 +49,8 @@ fn status(mode: &str) -> ExitCode {
         }
     } else if mode.contains("no-notification") {
         println!("T1BRIDGE-DESKTOP 1 3 42 0");
+    } else if mode.contains("display-off") {
+        println!("T1BRIDGE-DESKTOP 1 23 42 0 0");
     } else {
         println!("T1BRIDGE-DESKTOP 1 7 42 0");
     }
