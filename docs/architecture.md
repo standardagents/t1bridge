@@ -98,8 +98,8 @@ The required order is:
 
 The Touch Bar hardware service starts after the DRM and input devices appear.
 The user process may start later and reconnect without restarting hardware.
-Missing or failed desktop providers affect only their audio, media, and
-notification behavior. No provider failure blocks the hardware controls or
+Missing or failed desktop providers affect only their audio, media,
+notification, and display-power behavior. No provider failure blocks the hardware controls or
 renderer reconnection.
 
 ## Guarded device lifecycle

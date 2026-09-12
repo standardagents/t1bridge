@@ -77,7 +77,7 @@ kernel combination has been tested. Missing T1 functionality remains in scope.
 | Touch Bar display and touch input | 🟢 Available | Default renderer, Escape, hardware controls, and F1–F12 while Fn is held. This is the Touch Bar display, not the laptop's main GPU/display. |
 | Screen and keyboard brightness buttons | 🟢 Available | Controls the machine's available Linux backlights; this does not mean T1Bridge owns those backlight drivers. |
 | Custom Touch Bar renderers | 🟢 Available | Unprivileged programs through the [renderer interface](docs/interfaces.md#renderer-selection-v1). Try the optional [Doom demo](#try-a-custom-touch-bar-ui). |
-| Volume, media controls, desktop HUDs | 🟡 Optional integration | Requires a desktop provider; none is bundled in the core package. |
+| Volume, media controls, desktop HUDs, Touch Bar off with the display | 🟡 Optional integration | Requires a desktop provider; none is bundled in the core package. |
 | Touch ID enrollment, matching and deletion | 🟢 Available | Standard fprintd tools; up to three enrolled fingers for one Linux owner. Requires preserved Apple EFI data. |
 | sudo, Polkit and lock-screen authentication | 🟡 Requires configuration | Uses `pam_fprintd`; configure each consumer and retain password fallback. |
 | Saved fingerprints across reboot | 🟢 Available | Protected keybag storage and automatic restore; no routine re-enrollment. |

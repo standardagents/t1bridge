@@ -70,6 +70,7 @@ fn available_state() -> DesktopState {
             | DesktopCapabilities::NOTIFICATION,
         volume: Some(42),
         muted: false,
+        display_off: false,
     }
 }
 
@@ -98,6 +99,21 @@ fn provider_status_and_actions_cross_the_fixed_process_contract() {
     wait_for_log(
         &path.with_extension("log"),
         "v1 notify-renderer-fallback selection-exited",
+    );
+}
+
+#[test]
+fn display_power_crosses_the_status_record_only_when_advertised() {
+    let directory = TestDirectory::new();
+    let path = directory.provider("display-off-provider");
+    let provider = DesktopProvider::start(&path).expect("start provider worker");
+    wait_for_state(
+        &provider,
+        DesktopState {
+            capabilities: available_state().capabilities | DesktopCapabilities::DISPLAY_POWER,
+            display_off: true,
+            ..available_state()
+        },
     );
 }
 

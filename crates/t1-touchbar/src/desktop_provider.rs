@@ -35,7 +35,12 @@ impl DesktopCapabilities {
     pub const MEDIA: Self = Self(2);
     pub const NOTIFICATION: Self = Self(4);
     pub const LEVEL_FEEDBACK: Self = Self(8);
-    const ALL: u8 = Self::AUDIO.0 | Self::MEDIA.0 | Self::NOTIFICATION.0 | Self::LEVEL_FEEDBACK.0;
+    pub const DISPLAY_POWER: Self = Self(16);
+    const ALL: u8 = Self::AUDIO.0
+        | Self::MEDIA.0
+        | Self::NOTIFICATION.0
+        | Self::LEVEL_FEEDBACK.0
+        | Self::DISPLAY_POWER.0;
 
     #[must_use]
     pub const fn contains(self, capability: Self) -> bool {
@@ -56,6 +61,9 @@ pub struct DesktopState {
     pub capabilities: DesktopCapabilities,
     pub volume: Option<u8>,
     pub muted: bool,
+    /// True only while a provider advertising display power reports the
+    /// desktop display off. An absent or failed provider never blanks.
+    pub display_off: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -432,10 +440,22 @@ fn finish_status(status: ExitStatus, output: Vec<u8>) -> Result<Vec<u8>, Desktop
 fn parse_status(output: &[u8]) -> Result<DesktopState, DesktopProviderError> {
     let text = std::str::from_utf8(output).map_err(|_| DesktopProviderError::Status)?;
     let fields: Vec<_> = text.split_ascii_whitespace().collect();
-    let [magic, version, capability_field, volume_field, muted_field] = fields.as_slice() else {
-        return Err(DesktopProviderError::Status);
-    };
-    if *magic != STATUS_MAGIC || *version != STATUS_VERSION {
+    let (magic, version, capability_field, volume_field, muted_field, display_field) =
+        match fields.as_slice() {
+            [magic, version, capabilities, volume, muted] => {
+                (*magic, *version, *capabilities, *volume, *muted, None)
+            }
+            [magic, version, capabilities, volume, muted, display] => (
+                *magic,
+                *version,
+                *capabilities,
+                *volume,
+                *muted,
+                Some(*display),
+            ),
+            _ => return Err(DesktopProviderError::Status),
+        };
+    if magic != STATUS_MAGIC || version != STATUS_VERSION {
         return Err(DesktopProviderError::Status);
     }
     let bits = capability_field
@@ -452,22 +472,38 @@ fn parse_status(output: &[u8]) -> Result<DesktopState, DesktopProviderError> {
         if volume > 100 {
             return Err(DesktopProviderError::Status);
         }
-        let muted = match *muted_field {
-            "0" => false,
-            "1" => true,
-            _ => return Err(DesktopProviderError::Status),
-        };
+        let muted = parse_flag(muted_field)?;
         (Some(volume), muted)
-    } else if *volume_field == "-" && *muted_field == "-" {
+    } else if volume_field == "-" && muted_field == "-" {
         (None, false)
     } else {
         return Err(DesktopProviderError::Status);
+    };
+    // The display field exists exactly when display power is advertised, so
+    // a minor-zero renderer keeps rejecting the bit and a minor-zero provider
+    // keeps sending five fields.
+    let display_off = match (
+        capabilities.contains(DesktopCapabilities::DISPLAY_POWER),
+        display_field,
+    ) {
+        (true, Some(display)) => !parse_flag(display)?,
+        (false, None) => false,
+        _ => return Err(DesktopProviderError::Status),
     };
     Ok(DesktopState {
         capabilities,
         volume,
         muted,
+        display_off,
     })
+}
+
+fn parse_flag(field: &str) -> Result<bool, DesktopProviderError> {
+    match field {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(DesktopProviderError::Status),
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +523,7 @@ mod tests {
                     | DesktopCapabilities::LEVEL_FEEDBACK,
                 volume: Some(42),
                 muted: true,
+                display_off: false,
             })
         );
         assert_eq!(
@@ -495,15 +532,47 @@ mod tests {
                 capabilities: DesktopCapabilities::MEDIA | DesktopCapabilities::NOTIFICATION,
                 volume: None,
                 muted: false,
+                display_off: false,
             })
         );
+    }
+
+    #[test]
+    fn status_parser_reads_display_power_only_when_advertised() {
+        assert_eq!(
+            parse_status(b"T1BRIDGE-DESKTOP 1 17 42 0 0\n"),
+            Ok(DesktopState {
+                capabilities: DesktopCapabilities::AUDIO | DesktopCapabilities::DISPLAY_POWER,
+                volume: Some(42),
+                muted: false,
+                display_off: true,
+            })
+        );
+        assert_eq!(
+            parse_status(b"T1BRIDGE-DESKTOP 1 16 - - 1\n"),
+            Ok(DesktopState {
+                capabilities: DesktopCapabilities::DISPLAY_POWER,
+                volume: None,
+                muted: false,
+                display_off: false,
+            })
+        );
+        for invalid in [
+            b"T1BRIDGE-DESKTOP 1 16 - -".as_slice(),
+            b"T1BRIDGE-DESKTOP 1 16 - - 2",
+            b"T1BRIDGE-DESKTOP 1 16 - - -",
+            b"T1BRIDGE-DESKTOP 1 1 42 0 1",
+            b"T1BRIDGE-DESKTOP 1 17 42 0",
+        ] {
+            assert_eq!(parse_status(invalid), Err(DesktopProviderError::Status));
+        }
     }
 
     #[test]
     fn status_parser_rejects_ambiguous_or_unbounded_state() {
         for invalid in [
             b"T1BRIDGE-DESKTOP 2 7 42 0".as_slice(),
-            b"T1BRIDGE-DESKTOP 1 16 - -",
+            b"T1BRIDGE-DESKTOP 1 32 - -",
             b"T1BRIDGE-DESKTOP 1 1 - -",
             b"T1BRIDGE-DESKTOP 1 0 42 0",
             b"T1BRIDGE-DESKTOP 1 1 101 0",
