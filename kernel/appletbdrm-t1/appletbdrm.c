@@ -734,6 +734,9 @@ static int appletbdrm_setup_mode_config(struct appletbdrm_device *adev)
 	return 0;
 }
 
+/* Forward decl: defined with park(), used by probe() below. */
+static void appletbdrm_t1_unpark(struct appletbdrm_device *adev);
+
 static int appletbdrm_probe(struct usb_interface *intf,
 			    const struct usb_device_id *id)
 {
@@ -805,6 +808,14 @@ static int appletbdrm_probe(struct usb_interface *intf,
 		drm_err(drm, "Failed to clear display\n");
 		return ret;
 	}
+
+	/*
+	 * Re-assert the T1 display byte to ON. The panel is lit by the T1's own
+	 * firmware at power-on; clear_display alone leaves it black once the
+	 * driver takes over. See appletbdrm_t1_unpark().
+	 */
+	if (appletbdrm_is_t1(adev))
+		appletbdrm_t1_unpark(adev);
 
 	return 0;
 }
