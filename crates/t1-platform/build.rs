@@ -89,6 +89,7 @@ fn main() {
         ));
     }
     compile_usb_cycle_guard(&mut objects, &compiler, &manifest, &output);
+    compile_recovery(&mut objects, &compiler, &manifest, &output);
     let xz = env::var_os("CARGO_FEATURE_XZ").is_some();
     if xz {
         objects.push(compile(
@@ -106,6 +107,22 @@ fn main() {
         touchbar_session,
         preserved_efi_discovery,
     );
+}
+
+fn compile_recovery(objects: &mut Vec<PathBuf>, compiler: &OsStr, manifest: &Path, output: &Path) {
+    if env::var_os("CARGO_FEATURE_ONLINE_RECOVERY").is_none() {
+        return;
+    }
+    for name in ["t1_recovery_fs", "t1_recovery_io"] {
+        objects.push(compile(
+            compiler,
+            &manifest.join(format!("c/{name}.c")),
+            &output.join(format!("{name}.o")),
+        ));
+    }
+    for library in ["curl", "archive", "crypto", "udev"] {
+        println!("cargo:rustc-link-lib={library}");
+    }
 }
 
 fn compile_usb_cycle_guard(

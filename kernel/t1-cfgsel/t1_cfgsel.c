@@ -26,6 +26,8 @@
 #define T1_SEP_SUBCLASS 0xf9
 #define T1_SEP_PROTOCOL 0x11
 
+#include "t1_recovery_reset.h"
+
 static const struct usb_host_interface *
 t1_cfgsel_find_altsetting(const struct usb_host_config *config,
 			  u8 interface_number, u8 alternate_setting)
@@ -138,6 +140,8 @@ static const struct usb_device_id t1_cfgsel_devices[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, t1_cfgsel_devices);
+/* Recovery-mode machines also need the guarded reset interface loaded. */
+MODULE_ALIAS("usb:v05ACp1281d*dc*dsc*dp*ic*isc*ip*in*");
 
 static struct usb_device_driver t1_cfgsel_driver = {
 	.name = "t1bridge-cfgselector",
@@ -149,11 +153,19 @@ static struct usb_device_driver t1_cfgsel_driver = {
 
 static int __init t1_cfgsel_init(void)
 {
-	return usb_register_device_driver(&t1_cfgsel_driver, THIS_MODULE);
+	int result = usb_register_device_driver(&t1_cfgsel_driver, THIS_MODULE);
+
+	if (result)
+		return result;
+	result = t1_recovery_register();
+	if (result)
+		usb_deregister_device_driver(&t1_cfgsel_driver);
+	return result;
 }
 
 static void __exit t1_cfgsel_exit(void)
 {
+	t1_recovery_unregister();
 	usb_deregister_device_driver(&t1_cfgsel_driver);
 }
 

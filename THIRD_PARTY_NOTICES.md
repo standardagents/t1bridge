@@ -1,5 +1,18 @@
 # Third-party notices
 
+The native recovery command includes these Rust libraries under their MIT
+license option. Their copyright notices are:
+
+- [base64 0.22.1](https://github.com/marshallpierce/rust-base64): Copyright (c) 2015 Alice Maz.
+- [quick-xml 0.42.0](https://github.com/tafia/quick-xml): Copyright (c) 2016 Johann Tuffe.
+- [memchr 2.8.3](https://github.com/BurntSushi/memchr): Copyright (c) 2015 Andrew Gallant.
+
+The MIT license text below also applies to these three libraries. Recovery
+dynamically links the distribution's libcurl, OpenSSL libcrypto, libarchive,
+liblzma and libudev; their packages provide their respective licenses.
+No third-party recovery implementation is linked or bundled. Protocol source
+references are recorded in [the recovery documentation](docs/linux-recovery.md).
+
 The built-in Touch Bar renderer contains generated alpha masks made from the following sources. The source fonts and vector files are not shipped.
 
 - [Cupertino Icons 1.0.9](https://pub.dev/packages/cupertino_icons/versions/1.0.9): `assets/CupertinoIcons.ttf`.

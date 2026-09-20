@@ -1,8 +1,80 @@
-# Linux-only recovery source review
+# Native Linux recovery
 
-Review for [#25](https://github.com/standardagents/t1bridge/issues/25),
-September 20, 2026. **Keep recovery an explicit, separately owned operation;
-do not run it from T1Bridge installation or upgrades.**
+Implementation for [#25](https://github.com/standardagents/t1bridge/issues/25),
+September 20, 2026. **Experimental: real-device recovery is not yet accepted.
+Never run recovery from installation or upgrades.**
+
+## Attended online command
+
+The `t1bridge` package contains its own C/Rust recovery implementation:
+
+```sh
+sudo t1bridge machine-data recover --online --efi /path/to/mounted-esp
+```
+
+The path must identify the root of a mounted, writable FAT EFI system partition,
+owned by root and not writable by other users. Install the matching
+`t1bridge-dkms` package and reboot before using this command; its guarded reset
+interface is part of `t1_cfgsel`. Do not run the command on a working machine.
+
+The command checks all discovered preserved EFI sources first. Any existing
+`EMBEDDEDOS` directory, partial data, interrupted staging directory, or inspection
+failure blocks online recovery. Try a verified same-Mac backup with the local
+import command first. Recovery requires a supported T1 Mac already in USB
+recovery mode and an explicit `RECOVER` confirmation on an attended terminal.
+Apple receives the T1's identity and signing nonces during signing. Factory
+recovery uses device TLS tunnels to public Apple HTTPS endpoints.
+
+The native sequence verifies the pinned Apple firmware package, provisions FDR,
+resets only the T1, replays the recovered store in a second restore, resets the
+T1 again, and boots the image and ticket from that second signing transaction.
+It requires successful final restore status, a durable FDR commit, matching
+replayed data and 30 seconds of stable functional USB configuration. Only then
+does it save all three EFI files in a staged directory, flush and verify them,
+rename the complete directory without replacing existing data, and run the
+sensor-matching local importer.
+
+Private attempts are retained under `/var/lib/t1bridge/recovery`, with directory
+mode 0700 and file mode 0600. An interrupted `active` attempt blocks another
+restore. It requires inspection before retry; the tool does not automatically
+replay incomplete artifacts or resume an uncertain firmware mutation. Do not
+publish these files, Apple tickets, FDR contents or device identities. Report the
+last printed stage and error, package versions and model instead.
+
+The initial implementation does not repartition device storage, enter DFU, reset
+a functional T1, replace existing EFI generations, or automatically recover
+interrupted attempts. Unknown restore requests fail explicitly. Apple service
+availability and full device behavior remain unverified. Track native acceptance
+in [#43](https://github.com/standardagents/t1bridge/issues/43): generated-data
+import/calibration load, enrollment, match/non-match, warm/cold boot, Touch Bar,
+camera and ALS. Existing local recovery did not require erasing EFI for a test.
+
+## Dependencies and privilege boundary
+
+The shipped restore protocol, USB mux, FDR control flow and EFI transaction are
+T1Bridge code. System libcurl/OpenSSL provide verified HTTPS and SHA-256;
+libarchive and liblzma provide archive decoding. The MIT-licensed `quick-xml`,
+`base64` and `memchr` crates provide parsing primitives. No `t1-revive`,
+idevicerestore, libirecovery, libimobiledevice, usbmuxd or acpi_call dependency is
+used, and no recovery executable is launched.
+
+Root is required to claim the recovery USB interface, inspect EFI partitions,
+write the selected ESP and invoke the T1-only reset. `/dev/t1bridge-recovery` is
+0600 and requires `CAP_SYS_RAWIO`; the kernel checks the supported Mac model,
+the selected USB device and absence of a functional HID personality, then
+discovers a unique zero-argument `FRST` method below that USB controller's ACPI
+node. The caller cannot supply arbitrary ACPI paths. No listener or permanent
+network service is added. Outbound sockets are limited to the pinned firmware
+download, Apple signing and device-requested public Apple HTTPS destinations.
+
+Protocol facts were checked against
+[libirecovery](https://github.com/libimobiledevice/libirecovery/tree/95dec3aa25b1e30654ca107eb971971f6a216520),
+[usbmuxd](https://github.com/libimobiledevice/usbmuxd/tree/3ded00c9985a5108cfc7591a309f9a23d57a8cba),
+[libimobiledevice](https://github.com/libimobiledevice/libimobiledevice/tree/fa0f79190142bc309307967c058f89c1b36eb6b8),
+[libtatsu](https://github.com/libimobiledevice/libtatsu/tree/60a39f36d719344360ec2e87563ed43f61f0530f),
+and [idevicerestore](https://github.com/libimobiledevice/idevicerestore/tree/540c352c4c44896f7415abef87a166e8bbaea9b0).
+The implementation was authored independently; these restore libraries are
+reference material, not bundled source or runtime dependencies.
 
 ## Local data comes first
 
@@ -33,8 +105,10 @@ commands and error categories.
 Reviewed [niconistal/t1-revive at a861170](https://github.com/niconistal/t1-revive/tree/a8611702ceee4947382c64f41035087cfbb6594e):
 the orchestrator, provision/personalize/boot/stage/handover steps, firmware
 verification, vendored patch set and Arch recipe. This is source review, not
-an independently reproduced recovery. No firmware, device data or private
-artifacts were downloaded, and no hardware restore commands were run.
+an independently reproduced recovery. The implementation work later downloaded
+and verified the pinned generic Apple package outside the repository to test
+the native parser. No Apple assets are committed or included in packages. No
+hardware restore commands were run on the owner's working Mac.
 
 ## What the implementation supplies
 
@@ -49,7 +123,7 @@ the device's own persistent state.
 
 | Boundary | Source finding |
 | --- | --- |
-| Supported model guard | Four 2016/2017 Touch Bar models are accepted and marked tested upstream. Its reports distinguish intact-ESP checks on 14,2 from regeneration on 13,2; the 13,2 report has cold-boot/Touch Bar evidence but no Touch ID test. Model acceptance is not full functional coverage. |
+| Supported model guard | Four 2016/2017 Touch Bar models are accepted and marked tested upstream. The 14,2 reports include an intact-ESP control and a separate regeneration/cold-boot/match/non-match run. The 13,2 reports include a cold-boot/Touch Bar run without Touch ID testing and a later enrollment run without completed verification. Model acceptance is not full functional coverage. |
 | Generic firmware | `lib/firmware.sh` pins the Apple CDN package, size, checksum and extracted-file manifest. Upstream identifies bundle 901 / build 14Y901. Nothing here verifies Apple's current signing availability. |
 | Tools/dependencies | Patched idevicerestore, libirecovery and usbmuxd run in a private prefix with pinned upstream references. The orchestrator uses Bash and Python extractors; it cannot be copied wholesale into this repository's C/Rust runtime. |
 | Provisioning | `step_provision` asks the device/Apple restore service for a store and saves it privately. `step_personalize` uses that new store and captures an image/ticket pair. |
@@ -99,17 +173,36 @@ Touch ID. They remain distinct from independent T1Bridge acceptance. The
 13,3 enrollment and dark-panel issues, and 14,3 display timeout, must not be
 collapsed into a blanket recovery-success claim.
 
-## Integration decision and next deliverable
+## Native implementation boundary
 
-Retain `t1-revive` as an external recovery tool under its own ownership. Do not
-add it as a core dependency, vendor its scripts, distribute personalized Apple
-assets, or create a privileged recovery daemon/socket. A future installer
-handoff should detect missing data, explain the distinct attended recovery
-step, then re-enter T1Bridge through the existing importer after recovery.
+Implement recovery directly in T1Bridge's C/Rust code. `t1-revive` is source
+reference material, not a package dependency, vendored runtime or delegated
+command. Do not replace it with another external recovery executable or add
+a third-party restore stack. The proposed external-tool handoff in
+[PR #44](https://github.com/standardagents/t1bridge/pull/44) was withdrawn
+unmerged; it was never released.
 
-Before recommending that handoff as supported, resolve the failure/EFI gates
-above and obtain a reproducible result on a machine that already needs
-recovery, with backups and an agreed recovery procedure. Never erase a
-working machine's EFI data to satisfy the test. This review advances the
-source/integration decision; it does not replace current supported recovery
-instructions or close #25.
+The existing local importer already owns discovery, bounded source parsing,
+sensor matching and protected storage. That local path passed the owner's
+backup-integrity check, live-EFI comparison and explicit backup import. It
+does not need an empty-EFI test.
+
+The native implementation is in `crates/t1-import/src/recovery`, with focused
+Linux/library boundaries in `t1-platform` and the guarded kernel reset in
+`t1-cfgsel`. Apple's online services remain protocol inputs. Synthetic tests
+and generic firmware parsing do not establish real-device recovery acceptance.
+
+[#25](https://github.com/standardagents/t1bridge/issues/25) owns that work and
+delivery in the signed package so testers need no source build. The owner
+allows experimental package delivery before hardware acceptance, with the
+unverified status stated explicitly. [#43](https://github.com/standardagents/t1bridge/issues/43)
+retains generated-data import/calibration-load and functional/persistence
+acceptance before promotion to supported recovery.
+
+Keep recovery attended and local-first. Installation, upgrades and importer
+errors must never trigger it automatically. Preserve existing association
+checks, protected calibration and password access. Do not distribute Apple
+assets or introduce an unjustified recovery daemon/socket. Validate failure
+handling with synthetic fixtures and disposable storage; use a machine that
+already needs recovery for live acceptance. Never erase working EFI data to
+manufacture that case.

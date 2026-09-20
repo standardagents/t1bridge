@@ -10,6 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
+base64 = "=0.22.1"
+quick-xml = "=0.42.0"
 t1-bridge = { path = "../t1-bridge", version = "=0.0.0" }
 t1-daemons = { path = "../t1-daemons", version = "=0.0.0" }
-t1-platform = { path = "../t1-platform", version = "=0.0.0", features = ["import-fs", "preserved-efi-discovery", "usb-cycle-guard", "xz"] }
+t1-platform = { path = "../t1-platform", version = "=0.0.0", features = ["import-fs", "preserved-efi-discovery", "usb-cycle-guard", "xz", "online-recovery"] }

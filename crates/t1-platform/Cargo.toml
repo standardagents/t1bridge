@@ -23,6 +23,7 @@ touchbar-io = []
 touchbar-session = []
 usb-cycle-guard = []
 xz = []
+online-recovery = []
 
 [lints.rust]
 unsafe_code = "deny"
