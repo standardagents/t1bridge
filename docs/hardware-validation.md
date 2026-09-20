@@ -414,9 +414,16 @@ For the display recovery follow-up to #18, distinguish these paths:
 
 Synthetic fault tests cover the callback's fallback request. Actual USB-core,
 udev/systemd ordering and repeated attended cycles still require evidence.
-Do not inject hardware failures merely to exercise this fallback. The reported
-MacBookPro14,2 dark-bar failure occurred on 0.1.7; retest a build containing the
-fix before attributing a successful recovery to it.
+Do not inject hardware failures merely to exercise this fallback. The
+[later MacBookPro14,2 report](https://github.com/standardagents/t1bridge/issues/18#issuecomment-5681547052)
+records seven dark-panel S3 resumes on 0.1.9 with successful driver rearm.
+Accepted unpark writes and a no-park experiment did not relight that panel.
+The failure-only reprobe published in 0.1.10 cannot be assumed to repair a path
+whose rearm already returns success. Next distinguish accepted display replies
+from observed illumination during an already-planned attended cycle, then
+repeat the complete T1 matrix if an actual relight fix becomes available.
+Keep this suspend trigger separate from #34's boot-time darkness; their
+reported reboot recovery differs.
 
 ## Guarded T1 USB cycle
 

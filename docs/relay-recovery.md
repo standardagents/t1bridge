@@ -1,7 +1,7 @@
 # Sustained keybag relay failures
 
 Investigation for [#14](https://github.com/standardagents/t1bridge/issues/14),
-updated 2026-09-14. The native wedge remains unresolved. The restart backoff
+updated 2026-09-20. The native wedge remains unresolved. The restart backoff
 reduces repeated failures; it does not restore the Secure Enclave's state.
 
 ## What the current evidence establishes
@@ -51,8 +51,7 @@ reproduce the hardware wedge or establish a native fix.
 
 ## Next evidence and decision
 
-The cleanup observer landed in `02885e4` after v0.1.9. The next candidate build
-must contain it before requesting new affected-machine cleanup evidence. During
+The cleanup observer landed in `02885e4` and is published in v0.1.10. During
 ordinary use on an affected machine, retain the preceding healthy round, first
 rejection, subsequent retry, and the corresponding `sep-cleanup` outcomes using
 the [opt-in diagnostic procedure](diagnostics.md). Share only allowlisted
@@ -71,3 +70,20 @@ Until those conditions are met, keep the native sequence unchanged. Do not
 delete keybags, re-enroll, reset the T1, or manufacture repeated authentication
 cycles to test a speculative fix. Downstream lock-screen backoff can reduce
 cycling; it cannot establish that the native cause is repaired.
+
+## Passive checkpoint, September 20
+
+A read-only check on MacBookPro13,3, kernel `7.2.3-arch1-3`, core/DKMS
+`0.1.9.r8.g995f306-1`, found the relay active with `NRestarts=1` after about
+24 hours of host uptime. The boot journal contains one failed lease (`-111`)
+with successful cleanup, then another relay start followed by successful
+biometric load/promotion. There was no sustained failure restart loop in this
+snapshot. No service was restarted and no authentication was initiated.
+
+Some `keystore-outer=-3` records for selector `0x19` are followed by successful
+create/promotion and continued startup. Count actual lease failures and
+`NRestarts`, not every diagnostic `result=error` as a failed relay round.
+This older development build and one machine do not validate v0.1.10 on an
+affected reporter's machine. The next needed record is still the first
+ordinary-use failing round on that machine, including cleanup and restart
+counter changes; do not manufacture it through repeated authentication.

@@ -82,3 +82,26 @@ These checks establish the tested local behavior. Other models, concurrent
 camera/authentication operation, and the locked interval still need specific
 acceptance evidence. Source and package recipes are available alongside the
 [signed downloads](https://linux.standardagents.ai/arch/standardagents/x86_64/PRERELEASE.md).
+
+## Remaining acceptance slice
+
+A passive September 20 check found the optional `0.2.1-1` brightness service
+active with zero restarts on MacBookPro13,3, kernel `7.2.3-arch1-3`, using the
+older core/DKMS `0.1.9.r8.g995f306-1` build. This does not observe brightness
+while locked or establish fresh official-package coverage.
+
+On the next attended official-package run, record the exact package cohort
+and these separate outcomes:
+
+| Step | Owner action and observation | Pass condition |
+| --- | --- | --- |
+| Fresh sensor reports | After a fresh ready signal, cover for ten seconds, then uncover for ten seconds while monitoring light. | New readings change in the expected direction; cached initial values are excluded. |
+| Locked interval | With ordinary password access available, lock through the desktop while a private read-only observer samples the discovered panel brightness for twenty seconds; change the light during that interval. | The brightness controller makes no adjustment while locked. A post-unlock value alone cannot pass this row. |
+| Unlock | Unlock normally and allow the existing thirty-second hold to expire, then change the light once. | The controller adopts the current brightness and uses fresh reports without applying a queued locked-session reading. |
+| Concurrent use | In a separately agreed camera/fingerprint window, keep a short preview running and perform one normal verify while monitoring light. | Fresh light reports, preview and verification coexist; no device loss or new service restart. |
+| Model/boot coverage | Repeat on each model claimed as supported, after an ordinary planned cold boot. | Record each model separately; no extrapolation from 13,3. |
+
+The observer must discover the single panel backlight and record numeric
+brightness only, without screen capture or hard-coded device names. Keep
+manual-brightness preference tests separate from lock behavior. Suspend and
+runtime-power rows remain dependent on #18/#19.
