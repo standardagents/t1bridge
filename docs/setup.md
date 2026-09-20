@@ -4,16 +4,14 @@
 > **STOP BEFORE PARTITIONING: KEEP AND BACK UP THIS MAC'S APPLE EFI DATA.**
 > Preserve the Apple EFI partition and verify a backup on another device
 > contains `EFI/APPLE/EMBEDDEDOS/FDRData`. Do this before installing Linux or
-> formatting any partition. Touch ID needs this Mac's provisioning data.
-> Re-enrollment, reinstalling packages, and
+> formatting any partition. Without the original data or a matching backup,
+> T1Bridge cannot set up Touch ID. Re-enrollment, reinstalling packages, and
 > another Mac's backup are not substitutes.
 >
 > **Missing the data? Restore macOS on this Mac through a complete first boot
 > to regenerate it.** Just booting Recovery or downloading the installer is
 > not enough. Verify and back up `EFI/APPLE/EMBEDDEDOS/FDRData` before returning
 > to Linux. Back up your Linux data first; restoring macOS can erase it.
-> An optional [experimental Linux recovery path](online-recovery.md) is also
-> available for testing when usable local EFI and backups are unavailable.
 
 Start with the [official package installation instructions](../README.md#install-official-packages)
 for the public repository and signing key. This guide covers service activation,
@@ -163,11 +161,10 @@ calibration backup. If the data was lost, restore macOS on this Mac and complete
 its first boot, then preserve and back up the regenerated EFI data. This is a
 macOS recovery procedure, not something the T1Bridge importer performs.
 
-The optional [experimental online recovery command](online-recovery.md) hands
-off to the separately installed `t1-revive` tool. Consider it only after usable
-local EFI and same-Mac backups have been exhausted. This is an explicit attended
-operation awaiting hardware validation; it never runs during installation or
-upgrades. See the [source review](linux-recovery.md) for known limitations.
+A separate Linux recovery project is under [source and integration
+review](linux-recovery.md). Consider that attended online route only after
+usable local EFI and same-Mac backups have been exhausted. Its reported results
+do not yet establish a supported T1Bridge installer recovery path.
 
 ## Enroll and verify
 

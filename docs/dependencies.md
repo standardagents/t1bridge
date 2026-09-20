@@ -10,7 +10,6 @@ tools. See the [README](../README.md) for official packages and function support
 | Ambient-light desktop discovery | `iio-sensor-proxy`, stock `hid_sensor_hub` and `hid_sensor_als` | The core package recipe requires the distribution sensor proxy, which exposes the kernel IIO readings over the standard system D-Bus API. Its own udev rules activate the service. T1Bridge adds no sensor daemon or legacy iBridge driver; automatic brightness policy belongs to the desktop. Required starting with v0.1.8. |
 | Rust userspace | Rust standard library and T1Bridge workspace crates | `Cargo.lock` contains only the six local crates; there are no registry or Git crates. The normal compiler/platform runtime (`libc`, ELF loader, and `libgcc_s` on the audited Linux build) is still required. |
 | Machine-data importer | System `libudev` | The packaged preserved-ESP command enumerates block devices through the already-required systemd/libudev stack. Its current direct-FDR production path does not retain a `liblzma` dynamic link. Nothing launches `xz`, accepts device paths, or adds another device manager. |
-| Experimental online recovery | Optional, separately packaged `t1-revive>=0.1.3` | Explicit root-only terminal handoff; never started by imports, services or package hooks. The external tool owns its Bash/Python runtime, patched libimobiledevice stack and Apple-service access. None is vendored or linked into T1Bridge. See [installation and limits](online-recovery.md). |
 | Local sockets | Linux Unix `SOCK_SEQPACKET`, `SO_PEERCRED`, and libc | `t1-daemons` enables only `t1-platform/seqpacket`. The focused in-tree C boundary supplies the Linux socket operations; there is no socket crate. |
 | Private NCM readiness | Linux rtnetlink, udev, and systemd 256 or newer | An early link policy keeps the driver-assigned ephemeral name and assigns the interface to T1Bridge before network managers observe it. One short-lived capability-limited helper then validates the `apple_t1_ncm` interface, marks only that ephemeral kernel index up, and waits boundedly for IPv6 link-local readiness. The package creates no network-manager profile and invokes no `ip`, `nmcli`, network daemon, or shell. |
 | Guarded USB cycle | Linux sysfs, libc, and the packaged systemd CLI | The root-only acceptance command invokes fixed `systemctl` operations directly without a shell, dynamically validates the complete T1 interface map, and writes only the validated configuration-selector driver's bind controls. It adds no library, daemon, socket, USB reset, or power-policy dependency. |
@@ -43,7 +42,7 @@ boundary.
   The Arch package depends on DKMS to compile and install the modules;
   DKMS and package-building tools are not T1Bridge userspace runtime links.
 
-No core hardware service depends on crates.io packages, libusb, OpenSSL, an external
+No current code depends on crates.io packages, libusb, OpenSSL, an external
 `xz` command, `ip`, `nmcli`, a network-management daemon, `libfprint`,
 `fprintd`, or the `macbook-t1-linux` tree. The built-in renderer's generated
 Cupertino, Myna UI, and Inter masks add no runtime dependency; their required

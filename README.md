@@ -8,12 +8,12 @@ Current coverage and remaining work are listed below.
 > [!CAUTION]
 > **STOP BEFORE ERASING OR PARTITIONING YOUR MAC: PRESERVE ITS APPLE EFI DATA.**
 >
-> Touch ID needs this Mac's `EFI/APPLE/EMBEDDEDOS/FDRData`.
+> Touch ID needs this Mac's original `EFI/APPLE/EMBEDDEDOS/FDRData`.
 > Keep the Apple EFI partition and make a separate backup on another device
 > **before installing Linux or formatting any partition**. Check that the
 > backup actually contains that path; keeping only Linux boot files is not enough.
 >
-> **Without this data or a matching backup, recover it before setting up Touch ID.**
+> **Without this data or a matching backup, T1Bridge cannot set up Touch ID.**
 > Re-enrolling fingerprints, reinstalling this package, or another Mac's backup
 > cannot substitute for it.
 >
@@ -22,9 +22,6 @@ Current coverage and remaining work are listed below.
 > Merely downloading an installer or booting into Recovery is not enough.
 > Then verify and back up `EFI/APPLE/EMBEDDEDOS/FDRData` before returning to Linux.
 > Back up your Linux data before restoring macOS; restoration can erase it.
-> An optional [experimental Linux recovery path](docs/online-recovery.md) is
-> available for testing when usable local data is unavailable. It requires
-> a separately installed tool and an explicit attended command.
 
 Install the official signed packages from **linux.standardagents.ai**.
 No source build, GitHub authentication, or download token is required.
@@ -82,13 +79,12 @@ kernel combination has been tested. Missing T1 functionality remains in scope.
 | Screen and keyboard brightness buttons | 🟢 Available | Controls the machine's available Linux backlights; this does not mean T1Bridge owns those backlight drivers. |
 | Custom Touch Bar renderers | 🟢 Available | Unprivileged programs through the [renderer interface](docs/interfaces.md#renderer-selection-v1). Try the optional [Doom demo](#try-a-custom-touch-bar-ui). |
 | Volume, media controls, desktop HUDs, Touch Bar off with the display | 🟡 Optional integration | Requires a desktop provider; none is bundled in the core package. |
-| Touch ID enrollment, matching and deletion | 🟢 Available | Standard fprintd tools; up to three enrolled fingers for one Linux owner. Requires this Mac's provisioning data. |
+| Touch ID enrollment, matching and deletion | 🟢 Available | Standard fprintd tools; up to three enrolled fingers for one Linux owner. Requires preserved Apple EFI data. |
 | sudo, Polkit and lock-screen authentication | 🟡 Requires configuration | Uses `pam_fprintd`; configure each consumer and retain password fallback. |
 | Saved fingerprints across reboot | 🟢 Available | Protected keybag storage and automatic restore; no routine re-enrollment. |
 | FaceTime HD camera | 🟢 Available | T1 H.264 support through the packaged UVC driver. Application format support still applies. |
 | Private T1 network and xART storage | 🟢 Available | Device-driven services; no manually named network profile required. |
 | Apple machine-data import | 🟡 Available; latest automatic-import fix awaits hardware confirmation | Explicit same-machine EFI-tree/FDR backup works; 0.1.10 fixes the reproduced service sandbox failure. Import does not recreate lost data. |
-| Online recovery of missing provisioning data | 🟡 Experimental; hardware test pending | Optional `t1-revive` handoff after local EFI and same-Mac backups are exhausted. [Install and test](docs/online-recovery.md). Never invoked by installation or upgrades. |
 | T1 startup and reboot recovery | 🟢 Available | Packaged device/service ordering restores the T1 stack after boot. |
 | T1 sleep/wake (system suspend/resume) | 🔴 Not working on the tested machine | Not supported currently. T1 recovery across system sleep/wake remains in scope; the cause of the host suspend failure is not established here. Screen blanking and waking the display are not system suspend/resume. |
 | T1 runtime power saving | 🟡 Limited | Runtime autosuspend is disabled for T1 stability; power-saving suspend/recovery is not a supported feature yet. |
@@ -126,8 +122,6 @@ Touch Bar is required first; the demo does not install hardware drivers.
 > Touch ID setup will not work. Do not format the partition.**
 > If it is already missing, restore macOS through a complete first boot,
 > then preserve and back up the regenerated EFI data before returning to Linux.
-> The [experimental online recovery procedure](docs/online-recovery.md) provides
-> a separate Linux option for testers whose usable local data is already missing.
 
 Keep a working password login and back up your disk.
 
