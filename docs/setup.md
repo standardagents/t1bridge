@@ -146,6 +146,10 @@ calibration backup. If the data was lost, restore macOS on this Mac and complete
 its first boot, then preserve and back up the regenerated EFI data. This is a
 macOS recovery procedure, not something the T1Bridge importer performs.
 
+A separate Linux recovery project is under [source and integration
+review](linux-recovery.md). Its reported results do not yet establish a
+supported T1Bridge installer recovery path.
+
 ## Enroll and verify
 
 Run these commands as your normal user in a terminal inside your graphical
