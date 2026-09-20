@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod fdr;
 pub mod operation;
 pub mod preserved;
+pub mod recovery;
 pub mod runtime;
 pub mod session;
 pub mod status;

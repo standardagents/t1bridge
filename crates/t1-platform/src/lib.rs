@@ -4,6 +4,14 @@ pub mod diagnostics;
 #[allow(unsafe_code)]
 mod ffi;
 
+#[cfg(feature = "online-recovery")]
+#[allow(unsafe_code)]
+pub mod recovery_io;
+
+#[cfg(feature = "online-recovery")]
+#[allow(unsafe_code)]
+pub mod recovery_fs;
+
 #[cfg(feature = "frame-memfd")]
 pub mod frame_memfd;
 #[cfg(feature = "import-fs")]

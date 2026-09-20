@@ -1,5 +1,5 @@
 pkgname=t1bridge-dkms
-pkgver=0.1.11
+pkgver=0.1.12
 pkgrel=1
 pkgdesc='Kernel modules for the Apple T1 iBridge display, camera, and private NCM link'
 arch=('x86_64')
@@ -9,7 +9,7 @@ depends=('dkms')
 optdepends=('linux-headers: build modules for the Arch kernel')
 options=('!debug')
 source=("t1bridge-${pkgver}.tar.gz")
-sha256sums=('946a2d4053ab0e3f04f5f31260b12d15330a9e90ce9116c016f74cba96936b93')
+sha256sums=('15cfc8ece364c14e7121ce2efa07b047d656e520eee0130f44928c8551b79acd')
 backup=('etc/mkinitcpio.conf.d/t1bridge.conf')
 
 package() {
@@ -22,7 +22,7 @@ package() {
 		"${dkms_root}/kernel/apple-t1-ncm" \
 		"${dkms_root}/kernel/uvcvideo-t1" \
 		"${dkms_root}/kernel/dkms"
-	install -m644 "${source_root}/kernel/t1-cfgsel/"{Makefile,t1_cfgsel.c} \
+	install -m644 "${source_root}/kernel/t1-cfgsel/"{Makefile,t1_cfgsel.c,t1_recovery_reset.h} \
 		"${dkms_root}/kernel/t1-cfgsel/"
 	install -m644 "${source_root}/kernel/appletbdrm-t1/"{Makefile,appletbdrm.c,appletbdrm_resume.h,appletbdrm_protocol.h} \
 		"${dkms_root}/kernel/appletbdrm-t1/"

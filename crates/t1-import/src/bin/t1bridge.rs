@@ -30,12 +30,14 @@ enum ExitCategory {
     DurabilityUncertain = 29,
     CommitFailed = 30,
     UsbCycleFailed = 31,
+    RecoveryFailed = 32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Command {
     AutomaticImport,
     BackupImport(PathBuf),
+    OnlineRecovery(PathBuf),
     Enroll,
     Match,
     Status,
@@ -60,7 +62,7 @@ fn main() -> ExitCode {
     }
     let Some(command) = parse_command(arguments) else {
         eprintln!(
-            "usage: t1bridge [--diagnostics] machine-data import [--from ABSOLUTE_PATH] | enroll | match | status | validate usb-cycle | validate usb-live-loss"
+            "usage: t1bridge [--diagnostics] machine-data import [--from ABSOLUTE_PATH] | machine-data recover --online --efi ABSOLUTE_ESP_PATH | enroll | match | status | validate usb-cycle | validate usb-live-loss"
         );
         return ExitCategory::Usage.into();
     };
@@ -94,6 +96,10 @@ fn main() -> ExitCode {
             eprintln!("t1bridge: {error}");
             ExitCategory::UsbCycleFailed.into()
         }
+        Err(CommandError::Recovery(error)) => {
+            eprintln!("t1bridge: {error}");
+            ExitCategory::RecoveryFailed.into()
+        }
     }
 }
 
@@ -103,6 +109,7 @@ enum CommandError {
     TouchId(TouchIdClientError),
     Status(StatusError),
     UsbCycle(t1_import::usb_cycle::Error),
+    Recovery(t1_import::recovery::Error),
 }
 
 fn parse_command<I>(arguments: I) -> Option<Command>
@@ -112,6 +119,20 @@ where
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     match (arguments.next(), arguments.next(), arguments.next()) {
+        (Some(group), Some(command), Some(option))
+            if group == OsStr::new("machine-data")
+                && command == OsStr::new("recover")
+                && option == OsStr::new("--online") =>
+        {
+            if arguments.next()? != OsStr::new("--efi") {
+                return None;
+            }
+            let path = PathBuf::from(arguments.next()?);
+            if !path.is_absolute() || arguments.next().is_some() {
+                return None;
+            }
+            Some(Command::OnlineRecovery(path))
+        }
         (Some(group), Some(command), Some(option))
             if group == OsStr::new("machine-data")
                 && command == OsStr::new("import")
@@ -153,6 +174,9 @@ fn run(command: Command) -> Result<(), CommandError> {
         Command::BackupImport(path) => attempt_protected_import_from_backup(&path)
             .map(|_| ())
             .map_err(CommandError::Import),
+        Command::OnlineRecovery(path) => {
+            t1_import::recovery::run(&path).map_err(CommandError::Recovery)
+        }
         Command::Enroll => {
             t1_daemons::auth_client::run(TouchIdCommand::Enroll).map_err(CommandError::TouchId)
         }
@@ -174,6 +198,7 @@ const fn authority_allows(command: &Command, is_root: bool) -> bool {
     match command {
         Command::AutomaticImport
         | Command::BackupImport(_)
+        | Command::OnlineRecovery(_)
         | Command::Status
         | Command::UsbCycle
         | Command::UsbLiveLoss => is_root,
@@ -186,6 +211,7 @@ const fn authority_error(command: &Command) -> &'static str {
         Command::AutomaticImport | Command::BackupImport(_) => {
             "machine-data import requires root authority"
         }
+        Command::OnlineRecovery(_) => "online recovery requires root authority",
         Command::Enroll => "enrollment requires a non-root user",
         Command::Match => "matching requires a non-root user",
         Command::Status => "status requires root authority",
@@ -230,6 +256,48 @@ const fn category_for_error(error: ProtectedImportError) -> ExitCategory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn online_recovery_requires_explicit_mode_destination_and_root() {
+        let command = parse_command(arguments(&[
+            "t1bridge",
+            "machine-data",
+            "recover",
+            "--online",
+            "--efi",
+            "/synthetic-esp",
+        ]))
+        .unwrap();
+        assert_eq!(
+            command,
+            Command::OnlineRecovery(PathBuf::from("/synthetic-esp"))
+        );
+        assert!(authority_allows(&command, true));
+        assert!(!authority_allows(&command, false));
+        for args in [
+            vec!["t1bridge", "machine-data", "recover"],
+            vec!["t1bridge", "machine-data", "recover", "--online"],
+            vec![
+                "t1bridge",
+                "machine-data",
+                "recover",
+                "--online",
+                "--efi",
+                "relative",
+            ],
+            vec![
+                "t1bridge",
+                "machine-data",
+                "recover",
+                "--online",
+                "--efi",
+                "/synthetic-esp",
+                "--yes",
+            ],
+        ] {
+            assert!(parse_command(arguments(&args)).is_none());
+        }
+    }
 
     fn arguments(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
