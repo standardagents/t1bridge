@@ -115,9 +115,9 @@ On 0.1.9, automatic import can fail with exit 30 and `private import temporary
 file could not be created`, even when the destination is writable outside the
 service ([#36](https://github.com/standardagents/t1bridge/issues/36)). EFI
 discovery changes mount namespaces; the old storage handle can miss the
-service's writable mount. The source fix reacquires that handle before commit.
-Until an updated package is installed, use the explicit source command below
-with this Mac's preserved EFI tree or backup. Changing `WorkingDirectory` or
+service's writable mount. Version 0.1.10 reacquires that handle before commit.
+On older packages, use the explicit source command below with this Mac's
+preserved EFI tree or backup. Changing `WorkingDirectory` or
 loosening the service sandbox is not needed. That exit-30 message identifies
 the commit stage; an EFI discovery failure is reported as a source failure.
 
