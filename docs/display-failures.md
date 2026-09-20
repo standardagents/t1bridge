@@ -18,8 +18,8 @@ speculative power write.
 
 ## Opt-in reply evidence
 
-The following diagnostic records were added **after v0.1.10** and require a
-driver containing the new source change. They are not present in v0.1.10.
+The following diagnostic records require **v0.1.11 or newer**. They are not
+present in v0.1.10.
 The running DKMS module must match the tested build; a source checkout or an
 updated file on disk is not sufficient.
 

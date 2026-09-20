@@ -12,7 +12,7 @@ For the sustained keybag failure tracked in #14, see the
 
 For the separate display-discovery and dark-panel failures, see
 [display reply evidence and its limits](display-failures.md). Kernel reply
-logging has its own opt-in and requires the post-v0.1.10 driver change.
+logging has its own opt-in and requires the v0.1.11 driver or newer.
 
 ## Enable
 

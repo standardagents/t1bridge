@@ -283,20 +283,23 @@ are separate planned packages, not prerequisites for the commands above.
 
 For Omarchy controls and HUDs, install the optional
 [t1bridge-omarchy integration](https://github.com/standardagents/t1bridge-omarchy#install-and-enable)
-and complete its **one-time per-user `post-boot.d` hook setup**. Installing the
-package alone does not create that hook in user configuration. The package's
-README owns the hook creation, upgrade, and removal instructions.
+version 0.2.2 or newer. It supplies package-owned XDG autostart; no per-user
+hook is required. The package's README owns migration from the older manual
+hook and removal instructions. Remove an old hook only after verifying that
+it points to this package's helper, to avoid a second restart at login.
 
 The core renderer starts with the user manager and can precede the graphical
-session. `After=graphical-session.target` alone does not pull that target in or
-import its environment. The hook runs the packaged `session-start` helper,
-which imports the required desktop variables and restarts an active renderer.
-It repairs the early start; it does not prevent it
-([#35](https://github.com/standardagents/t1bridge/issues/35)). After installing
-the hook, run the helper from a terminal inside the active Omarchy session:
+session. The optional integration skips a start with an absent or empty
+display environment, then invokes the packaged helper through XDG autostart
+after graphical-session readiness. It imports the required desktop variables
+and starts or restarts only an enabled renderer. Disabled/masked units and
+custom renderer selection are preserved. Cold-login hardware acceptance is
+still pending in [#35](https://github.com/standardagents/t1bridge/issues/35).
+After installing, log out and back in, or run the helper from a terminal
+inside the active Omarchy session:
 
 ```sh
-/usr/lib/t1bridge-omarchy/session-start
+/usr/lib/t1bridge-omarchy/session-start --autostart
 ```
 
 Check controls and HUDs again after the next login. A renderer that now resolves
