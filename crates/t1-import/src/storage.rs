@@ -58,6 +58,11 @@ impl MachineDataStorage {
 impl ImportCommitStorage for MachineDataStorage {
     fn reserve_destination(&mut self, record_size: usize) -> Result<(), StorageFailure> {
         drop(self.reservation.take());
+        // Automatic EFI discovery unshares the mount namespace after open().
+        // A descriptor from the old namespace cannot traverse the cloned
+        // ReadWritePaths mounts and reaches read-only storage instead. Acquire
+        // the root again before pinning the destination for this transaction.
+        self.anchor = File::open("/").map_err(|_| StorageFailure::Failed)?;
         self.reservation = Some(
             Reservation::reserve(
                 self.anchor.as_fd(),
@@ -139,6 +144,93 @@ fn map_error(error: import_fs::Error) -> StorageFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commit::{CommitOutcome, commit_fdr_calibration};
+    use crate::fdr::FdrCalibrationRecord;
+    use std::fs;
+    use std::process::Command;
+
+    #[test]
+    fn commit_uses_current_mount_namespace() {
+        const RECORD: &[u8] = b"SYNTHETIC-CALIBRATION-RECORD";
+        if let Ok(descriptor) = std::env::var("T1BRIDGE_TEST_STALE_ROOT") {
+            let descriptor: u32 = descriptor.parse().unwrap();
+            let anchor = File::open(format!("/proc/self/fd/{descriptor}")).unwrap();
+            // This is the anchor opened before discovery changed namespaces.
+            // Prove the fixture reproduces the service's read-only traversal.
+            let mut stale = Reservation::reserve(
+                anchor.as_fd(),
+                &MACHINE_DATA_COMPONENTS,
+                RECORD.len(),
+                MAX_FDR_RECORD_SIZE,
+            )
+            .unwrap();
+            assert_eq!(
+                stale.create_private_temporary(),
+                Err(import_fs::Error::Failed)
+            );
+            drop(stale);
+
+            let mut storage = MachineDataStorage {
+                anchor,
+                reservation: None,
+            };
+            for expected in [CommitOutcome::Installed, CommitOutcome::AlreadyInstalled] {
+                assert_eq!(
+                    commit_fdr_calibration(
+                        &mut storage,
+                        FdrCalibrationRecord::from_validated_test_bytes(RECORD),
+                    ),
+                    Ok(expected),
+                );
+            }
+            assert_eq!(
+                fs::read("/var/lib/t1bridge/machine-data/calibration.fscl").unwrap(),
+                RECORD,
+            );
+            assert!(
+                !std::path::Path::new("/var/lib/t1bridge/machine-data/.calibration.fscl.tmp")
+                    .exists()
+            );
+            return;
+        }
+
+        let available = Command::new("unshare")
+            .args(["--user", "--map-root-user", "--mount", "true"])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !available {
+            eprintln!("skipping import namespace regression: user/mount namespaces unavailable");
+            assert!(std::env::var_os("T1BRIDGE_REQUIRE_NAMESPACE_TEST").is_none());
+            return;
+        }
+
+        let directory =
+            std::env::temp_dir().join(format!("t1-import-namespace-test-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let fixture = directory.join("fixture");
+        let root = directory.join("root");
+        fs::create_dir(&root).unwrap();
+        let build = Command::new("cc")
+            .args(["-std=c17", "-Wall", "-Wextra", "-Werror"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/c/test_import_namespace.c"
+            ))
+            .arg("-o")
+            .arg(&fixture)
+            .output()
+            .unwrap();
+        assert!(build.status.success(), "{build:?}");
+        let result = Command::new("unshare")
+            .args(["--user", "--map-root-user", "--mount"])
+            .arg(&fixture)
+            .arg(std::env::current_exe().unwrap())
+            .arg(&root)
+            .output()
+            .unwrap();
+        fs::remove_dir_all(directory).unwrap();
+        assert!(result.status.success(), "{result:?}");
+    }
 
     #[test]
     fn preserves_the_nonblocking_reservation_result() {
