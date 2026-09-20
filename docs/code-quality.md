@@ -16,6 +16,18 @@ pacman-contrib for the publication boundary tests. Override `KDIR` when validati
 against headers other than the running kernel. It is non-interactive and does
 not modify tracked files.
 
+The importer regression suite also uses `cc` and util-linux `unshare` to test
+storage across mount namespaces with synthetic files. It skips that case when
+user/mount namespaces are unavailable (for example, in a restricted CI
+container). Run the following on a host that permits them to require the
+regression instead of allowing a skip:
+
+```sh
+T1BRIDGE_REQUIRE_NAMESPACE_TEST=1 cargo test -p t1-import storage::tests::commit_uses_current_mount_namespace
+```
+
+The fixture uses an isolated root and never reads real EFI or fingerprint data.
+
 ## Design and source size
 
 An authored source file around 2,000 physical lines prompts a cohesion review.

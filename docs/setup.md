@@ -111,6 +111,16 @@ error, not permission to choose an arbitrary partition.
 Already-mounted EFI partitions are inspected through a private read-only view;
 the importer does not change their existing mount flags.
 
+On 0.1.9, automatic import can fail with exit 30 and `private import temporary
+file could not be created`, even when the destination is writable outside the
+service ([#36](https://github.com/standardagents/t1bridge/issues/36)). EFI
+discovery changes mount namespaces; the old storage handle can miss the
+service's writable mount. The source fix reacquires that handle before commit.
+Until an updated package is installed, use the explicit source command below
+with this Mac's preserved EFI tree or backup. Changing `WorkingDirectory` or
+loosening the service sandbox is not needed. That exit-30 message identifies
+the commit stage; an EFI discovery failure is reported as a source failure.
+
 To use a backup instead, supply its absolute path:
 
 ```sh
@@ -208,6 +218,48 @@ sudo, Polkit, and the lock screen. Never assume that success in one consumer
 proves the others. T1Bridge's Touch Bar prompt is cosmetic, not proof that the
 requesting application accepted authentication.
 
+### Omarchy lock-screen unlock
+
+After enrollment and `fprintd-verify` succeed, Omarchy's Quickshell lock screen
+also needs `/etc/pam.d/omarchy-lock-fingerprint`. It uses a separate
+`omarchy-lock-password` service for password unlock. These instructions apply
+to that lock screen, not older Hyprlock configurations or other desktops.
+
+First verify password unlock and keep the persistent root recovery shell
+described above open. If the fingerprint file already exists, back it up,
+inspect it, and preserve local account/access policy. To create a missing
+file, run:
+
+```sh
+sudoedit /etc/pam.d/omarchy-lock-fingerprint
+```
+
+Use the following configuration, matching
+[Omarchy's fingerprint service](https://github.com/basecamp/omarchy/blob/quattro/bin/omarchy-setup-security-fingerprint)
+with bounded attempts and a ten-second timeout:
+
+```text
+#%PAM-1.0
+auth       required    pam_fprintd.so max-tries=3 timeout=10
+account    include     system-local-login
+```
+
+Keep `/etc/pam.d/omarchy-lock-password` unchanged: password fallback is handled
+by the lock screen's independent password conversation, including when the
+fingerprint module, broker, socket, or device fails. This separate fingerprint
+service is not a replacement for a sudo, Polkit, or login PAM stack.
+
+Lock the screen and check fingerprint unlock, then verify password unlock
+after a failed or cancelled fingerprint attempt and with the fingerprint
+service unavailable. Keep the recovery shell open through these checks. To
+undo this setup, remove only the fingerprint file you created; restore a
+prior file from your backup if you edited one. Enrollment is unaffected.
+
+Do not run the generic Omarchy fingerprint setup wizard just to create this
+file: it can replace the matched T1Bridge libfprint/fprintd packages. This
+configuration enables lock-screen unlock only; sudo and Polkit remain
+separate consumers.
+
 ## Desktop controls and customization
 
 The default renderer is included. Hardware controls use T1Bridge's advertised
@@ -222,6 +274,30 @@ and restart it. Neither program should run as root. Follow the
 [provider and renderer contracts](interfaces.md#renderer-selection-v1), not a
 private hardware API. The reusable management TUI and baseline desktop provider
 are separate planned packages, not prerequisites for the commands above.
+
+### Omarchy session startup
+
+For Omarchy controls and HUDs, install the optional
+[t1bridge-omarchy integration](https://github.com/standardagents/t1bridge-omarchy#install-and-enable)
+and complete its **one-time per-user `post-boot.d` hook setup**. Installing the
+package alone does not create that hook in user configuration. The package's
+README owns the hook creation, upgrade, and removal instructions.
+
+The core renderer starts with the user manager and can precede the graphical
+session. `After=graphical-session.target` alone does not pull that target in or
+import its environment. The hook runs the packaged `session-start` helper,
+which imports the required desktop variables and restarts an active renderer.
+It repairs the early start; it does not prevent it
+([#35](https://github.com/standardagents/t1bridge/issues/35)). After installing
+the hook, run the helper from a terminal inside the active Omarchy session:
+
+```sh
+/usr/lib/t1bridge-omarchy/session-start
+```
+
+Check controls and HUDs again after the next login. A renderer that now resolves
+its provider can still have a dark panel; that separate report is
+[#34](https://github.com/standardagents/t1bridge/issues/34).
 
 ## Firewall, recovery, and removal
 
