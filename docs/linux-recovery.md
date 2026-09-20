@@ -49,7 +49,7 @@ the device's own persistent state.
 
 | Boundary | Source finding |
 | --- | --- |
-| Supported model guard | Four 2016/2017 Touch Bar models are accepted and marked tested upstream. Its reports distinguish intact-ESP checks on 14,2 from regeneration on 13,2; the 13,2 report has cold-boot/Touch Bar evidence but no Touch ID test. Model acceptance is not full functional coverage. |
+| Supported model guard | Four 2016/2017 Touch Bar models are accepted and marked tested upstream. The 14,2 reports include both an intact-ESP control and a separate regeneration/cold-boot/match/non-match run. The 13,2 reports include a cold-boot/Touch Bar run without Touch ID testing and a later enrollment run without completed verification. Model acceptance is not full functional coverage. |
 | Generic firmware | `lib/firmware.sh` pins the Apple CDN package, size, checksum and extracted-file manifest. Upstream identifies bundle 901 / build 14Y901. Nothing here verifies Apple's current signing availability. |
 | Tools/dependencies | Patched idevicerestore, libirecovery and usbmuxd run in a private prefix with pinned upstream references. The orchestrator uses Bash and Python extractors; it cannot be copied wholesale into this repository's C/Rust runtime. |
 | Provisioning | `step_provision` asks the device/Apple restore service for a store and saves it privately. `step_personalize` uses that new store and captures an image/ticket pair. |
@@ -99,17 +99,28 @@ Touch ID. They remain distinct from independent T1Bridge acceptance. The
 13,3 enrollment and dark-panel issues, and 14,3 display timeout, must not be
 collapsed into a blanket recovery-success claim.
 
-## Integration decision and next deliverable
+## Integration decision
 
-Retain `t1-revive` as an external recovery tool under its own ownership. Do not
-add it as a core dependency, vendor its scripts, distribute personalized Apple
-assets, or create a privileged recovery daemon/socket. A future installer
-handoff should detect missing data, explain the distinct attended recovery
-step, then re-enter T1Bridge through the existing importer after recovery.
+Offer `t1-revive` as a separately packaged **optional, experimental dependency**,
+through `t1bridge machine-data recover --online`. The owner approved making this
+path available for testing before independent hardware acceptance. See the
+[installation and testing procedure](online-recovery.md). The root-only Rust
+launcher requires an interactive terminal and explicit acknowledgement that
+local EFI and same-Mac backups have been checked. It keeps the external tool's
+confirmations enabled and runs the existing importer only after tool success.
 
-Before recommending that handoff as supported, resolve the failure/EFI gates
-above and obtain a reproducible result on a machine that already needs
+Do not vendor the tool's scripts, distribute personalized Apple assets, or
+create a recovery daemon/socket. Installation, upgrades and importer failures
+never invoke recovery. Installer UI integration remains separate from this
+explicit CLI handoff. The prepared upstream transaction/retry patch is not
+included in the optional package and has not been submitted: upstream's private
+reporting endpoint was disabled when checked on September 20, 2026.
+
+Before promoting the experimental handoff to supported recovery, resolve the
+failure/EFI gates above and obtain a reproducible result on a machine that already needs
 recovery, with backups and an agreed recovery procedure. Never erase a
-working machine's EFI data to satisfy the test. This review advances the
-source/integration decision; it does not replace current supported recovery
-instructions or close #25.
+working machine's EFI data to satisfy the test. The local-data path has already
+passed backup-integrity checks, live-EFI comparison and owner-run sensor-matched
+backup import on a MacBookPro13,3. That completes local-first acceptance without
+an empty-EFI test; [#43](https://github.com/standardagents/t1bridge/issues/43)
+retains online-recovery acceptance and the remaining upstream failure fixes.

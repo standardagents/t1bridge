@@ -30,12 +30,14 @@ enum ExitCategory {
     DurabilityUncertain = 29,
     CommitFailed = 30,
     UsbCycleFailed = 31,
+    RecoveryFailed = 32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Command {
     AutomaticImport,
     BackupImport(PathBuf),
+    OnlineRecovery,
     Enroll,
     Match,
     Status,
@@ -60,7 +62,7 @@ fn main() -> ExitCode {
     }
     let Some(command) = parse_command(arguments) else {
         eprintln!(
-            "usage: t1bridge [--diagnostics] machine-data import [--from ABSOLUTE_PATH] | enroll | match | status | validate usb-cycle | validate usb-live-loss"
+            "usage: t1bridge [--diagnostics] machine-data import [--from ABSOLUTE_PATH] | machine-data recover --online | enroll | match | status | validate usb-cycle | validate usb-live-loss"
         );
         return ExitCategory::Usage.into();
     };
@@ -94,6 +96,10 @@ fn main() -> ExitCode {
             eprintln!("t1bridge: {error}");
             ExitCategory::UsbCycleFailed.into()
         }
+        Err(CommandError::Recovery(error)) => {
+            eprintln!("t1bridge: {error}");
+            ExitCategory::RecoveryFailed.into()
+        }
     }
 }
 
@@ -103,6 +109,7 @@ enum CommandError {
     TouchId(TouchIdClientError),
     Status(StatusError),
     UsbCycle(t1_import::usb_cycle::Error),
+    Recovery(t1_import::recovery::Error),
 }
 
 fn parse_command<I>(arguments: I) -> Option<Command>
@@ -112,6 +119,14 @@ where
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     match (arguments.next(), arguments.next(), arguments.next()) {
+        (Some(group), Some(command), Some(option))
+            if group == OsStr::new("machine-data")
+                && command == OsStr::new("recover")
+                && option == OsStr::new("--online")
+                && arguments.next().is_none() =>
+        {
+            Some(Command::OnlineRecovery)
+        }
         (Some(group), Some(command), Some(option))
             if group == OsStr::new("machine-data")
                 && command == OsStr::new("import")
@@ -153,6 +168,9 @@ fn run(command: Command) -> Result<(), CommandError> {
         Command::BackupImport(path) => attempt_protected_import_from_backup(&path)
             .map(|_| ())
             .map_err(CommandError::Import),
+        Command::OnlineRecovery => recover_and_import(t1_import::recovery::run, || {
+            attempt_protected_import().map(|_| ())
+        }),
         Command::Enroll => {
             t1_daemons::auth_client::run(TouchIdCommand::Enroll).map_err(CommandError::TouchId)
         }
@@ -170,10 +188,27 @@ fn run(command: Command) -> Result<(), CommandError> {
     }
 }
 
+fn recover_and_import(
+    recover: impl FnOnce() -> Result<(), t1_import::recovery::Error>,
+    import: impl FnOnce() -> Result<(), ProtectedImportError>,
+) -> Result<(), CommandError> {
+    recover().map_err(CommandError::Recovery)?;
+    eprintln!("t1bridge: recovery tool completed; checking sensor-matched import");
+    import().map_err(|error| {
+        eprintln!("t1bridge: resolve the import error before retrying import; do not repeat firmware recovery");
+        CommandError::Import(error)
+    })?;
+    println!(
+        "t1bridge: recovered data accepted; next check status and fingerprint enrollment/matching"
+    );
+    Ok(())
+}
+
 const fn authority_allows(command: &Command, is_root: bool) -> bool {
     match command {
         Command::AutomaticImport
         | Command::BackupImport(_)
+        | Command::OnlineRecovery
         | Command::Status
         | Command::UsbCycle
         | Command::UsbLiveLoss => is_root,
@@ -186,6 +221,7 @@ const fn authority_error(command: &Command) -> &'static str {
         Command::AutomaticImport | Command::BackupImport(_) => {
             "machine-data import requires root authority"
         }
+        Command::OnlineRecovery => "online recovery requires root authority",
         Command::Enroll => "enrollment requires a non-root user",
         Command::Match => "matching requires a non-root user",
         Command::Status => "status requires root authority",
@@ -288,6 +324,7 @@ mod tests {
             (Command::Enroll, false, true),
             (Command::Match, false, true),
             (Command::Status, true, false),
+            (Command::OnlineRecovery, true, false),
             (Command::UsbCycle, true, false),
             (Command::UsbLiveLoss, true, false),
         ] {
@@ -320,6 +357,68 @@ mod tests {
             let mut args = vec!["t1bridge", "machine-data", "import"];
             args.extend(tail);
             assert_eq!(parse_command(arguments(&args)), None);
+        }
+    }
+
+    #[test]
+    fn recovery_requires_online_opt_in_and_rejects_unattended_or_forced_flags() {
+        assert_eq!(
+            parse_command(arguments(&[
+                "t1bridge",
+                "machine-data",
+                "recover",
+                "--online"
+            ])),
+            Some(Command::OnlineRecovery)
+        );
+        for tail in [
+            vec![],
+            vec!["--no-confirm"],
+            vec!["--online", "--no-confirm"],
+            vec!["--online", "--force"],
+            vec!["--online", "--from", "/synthetic/backup"],
+            vec!["--online", "--tool", "/synthetic/tool"],
+        ] {
+            let mut args = vec!["t1bridge", "machine-data", "recover"];
+            args.extend(tail);
+            assert_eq!(parse_command(arguments(&args)), None);
+        }
+    }
+
+    #[test]
+    fn recovery_failure_never_reaches_import_or_retries() {
+        use t1_import::recovery::Error;
+        for error in [
+            Error::Cancelled,
+            Error::ToolUnavailable,
+            Error::ToolFailed(Some(7)),
+            Error::ToolFailed(None),
+        ] {
+            assert_eq!(
+                recover_and_import(|| Err(error), || panic!("failed recovery must not import")),
+                Err(CommandError::Recovery(error))
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_success_requires_a_successful_subsequent_import() {
+        let recovered = std::cell::Cell::new(false);
+        for import_result in [Ok(()), Err(ProtectedImportError::StorageUnavailable)] {
+            recovered.set(false);
+            assert_eq!(
+                recover_and_import(
+                    || {
+                        recovered.set(true);
+                        Ok(())
+                    },
+                    || {
+                        assert!(recovered.get());
+                        import_result
+                    }
+                ),
+                import_result.map_err(CommandError::Import)
+            );
         }
     }
 
