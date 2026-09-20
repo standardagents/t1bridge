@@ -24,7 +24,7 @@ package() {
 		"${dkms_root}/kernel/dkms"
 	install -m644 "${source_root}/kernel/t1-cfgsel/"{Makefile,t1_cfgsel.c} \
 		"${dkms_root}/kernel/t1-cfgsel/"
-	install -m644 "${source_root}/kernel/appletbdrm-t1/"{Makefile,appletbdrm.c,appletbdrm_resume.h} \
+	install -m644 "${source_root}/kernel/appletbdrm-t1/"{Makefile,appletbdrm.c,appletbdrm_resume.h,appletbdrm_protocol.h} \
 		"${dkms_root}/kernel/appletbdrm-t1/"
 	install -m644 "${source_root}/kernel/apple-t1-ncm/"{Makefile,apple_t1_ncm.c} \
 		"${dkms_root}/kernel/apple-t1-ncm/"
