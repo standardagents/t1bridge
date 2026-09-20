@@ -1,8 +1,8 @@
 # Linux-only recovery source review
 
 Review for [#25](https://github.com/standardagents/t1bridge/issues/25),
-September 20, 2026. **Keep recovery an explicit, separately owned operation;
-do not run it from T1Bridge installation or upgrades.**
+September 20, 2026. **Recovery belongs in T1Bridge's C/Rust implementation;
+do not run it from installation or upgrades.**
 
 ## Local data comes first
 
@@ -49,7 +49,7 @@ the device's own persistent state.
 
 | Boundary | Source finding |
 | --- | --- |
-| Supported model guard | Four 2016/2017 Touch Bar models are accepted and marked tested upstream. Its reports distinguish intact-ESP checks on 14,2 from regeneration on 13,2; the 13,2 report has cold-boot/Touch Bar evidence but no Touch ID test. Model acceptance is not full functional coverage. |
+| Supported model guard | Four 2016/2017 Touch Bar models are accepted and marked tested upstream. The 14,2 reports include an intact-ESP control and a separate regeneration/cold-boot/match/non-match run. The 13,2 reports include a cold-boot/Touch Bar run without Touch ID testing and a later enrollment run without completed verification. Model acceptance is not full functional coverage. |
 | Generic firmware | `lib/firmware.sh` pins the Apple CDN package, size, checksum and extracted-file manifest. Upstream identifies bundle 901 / build 14Y901. Nothing here verifies Apple's current signing availability. |
 | Tools/dependencies | Patched idevicerestore, libirecovery and usbmuxd run in a private prefix with pinned upstream references. The orchestrator uses Bash and Python extractors; it cannot be copied wholesale into this repository's C/Rust runtime. |
 | Provisioning | `step_provision` asks the device/Apple restore service for a store and saves it privately. `step_personalize` uses that new store and captures an image/ticket pair. |
@@ -99,17 +99,38 @@ Touch ID. They remain distinct from independent T1Bridge acceptance. The
 13,3 enrollment and dark-panel issues, and 14,3 display timeout, must not be
 collapsed into a blanket recovery-success claim.
 
-## Integration decision and next deliverable
+## Native implementation boundary
 
-Retain `t1-revive` as an external recovery tool under its own ownership. Do not
-add it as a core dependency, vendor its scripts, distribute personalized Apple
-assets, or create a privileged recovery daemon/socket. A future installer
-handoff should detect missing data, explain the distinct attended recovery
-step, then re-enter T1Bridge through the existing importer after recovery.
+Implement recovery directly in T1Bridge's C/Rust code. `t1-revive` is source
+reference material, not a package dependency, vendored runtime or delegated
+command. Do not replace it with another external recovery executable or add
+a third-party restore stack. The proposed external-tool handoff in
+[PR #44](https://github.com/standardagents/t1bridge/pull/44) was withdrawn
+unmerged; it was never released.
 
-Before recommending that handoff as supported, resolve the failure/EFI gates
-above and obtain a reproducible result on a machine that already needs
-recovery, with backups and an agreed recovery procedure. Never erase a
-working machine's EFI data to satisfy the test. This review advances the
-source/integration decision; it does not replace current supported recovery
-instructions or close #25.
+The existing local importer already owns discovery, bounded source parsing,
+sensor matching and protected storage. That local path passed the owner's
+backup-integrity check, live-EFI comparison and explicit backup import. It
+does not need an empty-EFI test.
+
+Native online recovery is not implemented yet. It needs reviewed contracts
+for firmware extraction/verification, Apple signing and FDR exchanges, USB
+recovery transport, provision/personalize/memboot sequencing and recoverable
+EFI staging. Reuse existing T1Bridge parsing, USB and storage boundaries where
+they apply; a controller around an external restore tool does not satisfy this
+implementation requirement. Apple's online services remain protocol inputs.
+
+[#25](https://github.com/standardagents/t1bridge/issues/25) owns that work and
+delivery in the signed package so testers need no source build. The owner
+allows experimental package delivery before hardware acceptance, with the
+unverified status stated explicitly. [#43](https://github.com/standardagents/t1bridge/issues/43)
+retains generated-data import/calibration-load and functional/persistence
+acceptance before promotion to supported recovery.
+
+Keep recovery attended and local-first. Installation, upgrades and importer
+errors must never trigger it automatically. Preserve existing association
+checks, protected calibration and password access. Do not distribute Apple
+assets or introduce an unjustified recovery daemon/socket. Validate failure
+handling with synthetic fixtures and disposable storage; use a machine that
+already needs recovery for live acceptance. Never erase working EFI data to
+manufacture that case.
