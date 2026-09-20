@@ -71,6 +71,39 @@ macOS boundary; it does not supply the missing Linux T1 transport mapping.
 
 ## Proposed Linux contract
 
+### Source mapping follow-up, September 20
+
+The public Security tree at `db15acbe6a7f257a859ad9a3bb86097bfe0679d9`
+was checked for the next layer below SecKey/CryptoTokenKit. Its
+[SecAKSWrappers header](https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/OSX/utilities/SecAKSWrappers.h)
+conditionally imports `AppleKeyStore/libaks.h`; that backend implementation
+and `libaks_ref_key.h` are not supplied in this tree. The similarly named
+functions in [mockaks.m](https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/tests/secdmockaks/mockaks.m)
+are test doubles, not a T1 protocol implementation:
+
+| Operation sought | What this source actually provides | Contract still missing |
+| --- | --- | --- |
+| Create | `aks_ref_key_create` retains a mock object with fixed synthetic key data. | T1 request/reply, key type, allocation and owner. |
+| Export public key | `aks_ref_key_get_public_key` returns a zero-filled dummy buffer. | T1 reply encoding and validated point format. |
+| Sign | `aks_ref_key_sign` returns an error as an unimplemented mock. | T1 signing selector, digest rules, status and signature encoding. |
+| Delete/free | Mock deletion returns success; free releases a host-side reference. | Firmware release acknowledgement, uncertain-outcome behavior and isolation from biometric bags. |
+
+The [AKS regression consumer](https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/OSX/shared_regressions/si-44-seckey-aks.m)
+exercises SecKey signing/verification and opaque references through macOS
+frameworks. It does not connect those calls to a T1 USB request. None of the
+four operations has reached the source-to-wire evidence gate, so adding typed
+codecs now would encode guesses. No mock bytes or host API selector numbers
+were copied into T1Bridge.
+
+The next source requirement is the T1 backend mapping between those host
+operations and the EmbeddedOS SEP/keystore service, including allocation and
+release semantics. A useful contribution must identify firmware scope and
+request/reply layouts for all four operations. Until it exists, retain the
+existing synthetic biometric codec tests and do not allocate disposable keys
+on hardware or expose a new Linux signing socket.
+
+### Future API boundaries
+
 This is a design constraint for a future implementation, not an available API.
 Start with disposable P-256 signing only. Defer ECDH, persistence, SSH-agent
 integration and TPM interfaces until the underlying service is established.
