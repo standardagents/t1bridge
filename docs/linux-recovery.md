@@ -23,7 +23,7 @@ the device's own persistent state.
 
 | Boundary | Source finding |
 | --- | --- |
-| Supported model guard | Four 2016/2017 Touch Bar models are accepted; upstream separately marks 13,2 untested. Model acceptance is not hardware coverage. |
+| Supported model guard | Four 2016/2017 Touch Bar models are accepted and marked tested upstream. Its reports distinguish intact-ESP checks on 14,2 from regeneration on 13,2; the 13,2 report has cold-boot/Touch Bar evidence but no Touch ID test. Model acceptance is not full functional coverage. |
 | Generic firmware | `lib/firmware.sh` pins the Apple CDN package, size, checksum and extracted-file manifest. Upstream identifies bundle 901 / build 14Y901. Nothing here verifies Apple's current signing availability. |
 | Tools/dependencies | Patched idevicerestore, libirecovery and usbmuxd run in a private prefix with pinned upstream references. The orchestrator uses Bash and Python extractors; it cannot be copied wholesale into this repository's C/Rust runtime. |
 | Provisioning | `step_provision` asks the device/Apple restore service for a store and saves it privately. `step_personalize` uses that new store and captures an image/ticket pair. |
