@@ -96,6 +96,10 @@ tested, complete installation with a reboot rather than raw USB toggles.
 
 ## Import this machine's Apple data
 
+Use local data first: preserved EFI, then a verified backup from this same Mac.
+Import reads those sources and extracts Touch ID calibration; it does not
+restore the complete EFI boot tree, download firmware, or run regeneration.
+
 With the matching preserved Apple EFI partition attached:
 
 ```sh
@@ -139,6 +143,17 @@ Run import while no fingerprint operation is in progress. A sensor-unavailable
 error does not change calibration; retry when the reader is idle rather than
 resetting hardware or deleting state.
 
+Use the import exit category to choose the next step. An import failure never
+automatically triggers online recovery:
+
+| Exit | Meaning and next step |
+| --- | --- |
+| 20 | Sensor unavailable. Resolve hardware/service readiness and retry while idle. |
+| 21 | Discovery found no preserved local source. Check the available EFI partitions, then select a verified same-Mac backup explicitly. |
+| 22 | Source unreadable. Resolve access, mount or read errors; this does not establish data loss. |
+| 23–25 | Invalid, nonmatching or conflicting data. Resolve the source problem; never use donor data or choose an arbitrary record. |
+| 26–30 | Import reservation or protected-storage failure. Resolve that failure; do not delete working calibration or regenerate firmware. |
+
 Compressed backups and macOS installer/disk-image containers are not accepted
 by this command yet. Extract a backup you control first; do not copy guessed
 records into protected storage. An installer archive is not this Mac's
@@ -147,8 +162,9 @@ its first boot, then preserve and back up the regenerated EFI data. This is a
 macOS recovery procedure, not something the T1Bridge importer performs.
 
 A separate Linux recovery project is under [source and integration
-review](linux-recovery.md). Its reported results do not yet establish a
-supported T1Bridge installer recovery path.
+review](linux-recovery.md). Consider that attended online route only after
+usable local EFI and same-Mac backups have been exhausted. Its reported results
+do not yet establish a supported T1Bridge installer recovery path.
 
 ## Enroll and verify
 
