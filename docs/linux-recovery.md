@@ -4,6 +4,32 @@ Review for [#25](https://github.com/standardagents/t1bridge/issues/25),
 September 20, 2026. **Keep recovery an explicit, separately owned operation;
 do not run it from T1Bridge installation or upgrades.**
 
+## Local data comes first
+
+Use the preserved data on the target Mac before considering regeneration:
+
+1. Discover attached EFI partitions read-only and validate their data against
+   the live sensor through the existing machine-data importer.
+2. If no usable EFI source remains, try an explicitly selected, verified
+   backup from the same Mac through `t1bridge machine-data import --from`.
+   Do not search arbitrary home directories or silently select a backup.
+3. Consider online regeneration only after those local sources have been
+   exhausted. It remains a separate attended recovery procedure with its own
+   validation gates, not an automatic fallback from an import error.
+
+An unreadable partition, unavailable sensor, malformed or conflicting source,
+or protected-storage failure is a diagnosis to resolve; it is not proof that
+the Mac has lost its data. Never delete working EFI or calibration state to
+force the recovery path.
+
+Local import extracts sensor-matched Touch ID calibration. It does not restore
+the complete EFI boot tree. Restoring that tree from a verified same-Mac backup
+is a separate operation; Linux regeneration additionally needs Apple services.
+See [manual setup](setup.md#import-this-machines-apple-data) for the local
+commands and error categories.
+
+## Reviewed source
+
 Reviewed [niconistal/t1-revive at a861170](https://github.com/niconistal/t1-revive/tree/a8611702ceee4947382c64f41035087cfbb6594e):
 the orchestrator, provision/personalize/boot/stage/handover steps, firmware
 verification, vendored patch set and Arch recipe. This is source review, not
