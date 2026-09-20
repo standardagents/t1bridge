@@ -265,7 +265,7 @@ blindly run a desktop setup wizard that replaces this matched fingerprint pair.
 For Omarchy's Quickshell lock screen, follow the
 [Touch ID unlock steps](docs/setup.md#omarchy-lock-screen-unlock) after verifying
 your enrolled finger. For desktop controls and HUDs, complete the optional
-integration's [session hook setup](docs/setup.md#omarchy-session-startup).
+integration's [automatic session startup](docs/setup.md#omarchy-session-startup).
 
 See [manual setup](docs/setup.md) for desktop providers, removal and recovery,
 and [How Touch ID works](docs/touch-id.md) for startup and authentication diagrams.

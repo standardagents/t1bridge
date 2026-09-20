@@ -10,6 +10,10 @@ existing work; it adds no sensor commands, retries, unlock attempts, or resets.
 For the sustained keybag failure tracked in #14, see the
 [current investigation and next evidence](relay-recovery.md).
 
+For the separate display-discovery and dark-panel failures, see
+[display reply evidence and its limits](display-failures.md). Kernel reply
+logging has its own opt-in and requires the v0.1.11 driver or newer.
+
 ## Enable
 
 For one CLI command, put `--diagnostics` before the command:
@@ -77,6 +81,30 @@ backups, or state directories. An empty report is not success: check that the
 new binaries and setting are active. Locally overridden development binaries
 can differ from the package manager's version.
 
+## Instant enrollment failure
+
+For [#29](https://github.com/standardagents/t1bridge/issues/29), preserve the
+first failing original-machine attempt after successful import. A generic
+`enroll-unknown-error` and a short elapsed time do not identify its stage.
+Enable broker diagnostics while idle, then use one ordinary enrollment
+attempt with the owner ready and an unused label; do not delete a working
+print to obtain a reproduction. Record:
+
+| Boundary | Evidence to retain |
+| --- | --- |
+| Import | Successful automatic or explicit same-machine import, exact cohort; do not share its private source path. |
+| Broker preparation | Whether preparation begins/completes before the failure, plus the first failed stage. |
+| SEP lease/keystore | The operation code and first rejected selector with outer/inner status if present; include cleanup separately. |
+| Mesa transaction | The allowlisted command and result if a transaction was reached; absence is inconclusive when logging is disabled or capped. |
+| Caller result | Instructions/progress seen and final enroll result, without identifiers or payloads. |
+
+Keep native T1Bridge operation codes distinct from Linux errno values. The
+published #36 import correction does not itself fix an enrollment-stage
+failure. The successful regenerated-data 14,3 report does not resolve the
+original 13,3 report. Stop after the ordinary failure and retain evidence;
+do not treat broker restarts, repeated enrollment or regeneration as a
+diagnostic loop.
+
 ## Sustained keybag relay restarts
 
 Authentication normally stops the shared relay, uses the exclusive SEP lease,
@@ -125,7 +153,7 @@ No new requests, retries or resets are added. The observer runs only during the
 relay's synchronous native call and shares the process-wide 4096-record limit.
 This additional evidence is not present in v0.1.6 or earlier packages.
 
-Development source after v0.1.9 adds `component=sep phase=sep-cleanup` for the
+T1Bridge v0.1.10 adds `component=sep phase=sep-cleanup` for the
 relay and broker's native operation owners. Code `0` means cleanup of resources
 owned by that operation reported no error; it can also mean no native resource
 had been acquired. Code `-109` means ACM deletion, session destruction, descriptor
