@@ -13,8 +13,18 @@ of [#18](https://github.com/standardagents/t1bridge/issues/18).
 The 13,3 boot failure and 14,2 suspend failure have different triggers and
 reported recovery. Keep their results separate. A report-3 awake readback is
 not an illumination measurement; accepted unpark writes did not relight the
-reported panels. The next experiment is observation, not another reset or
-speculative power write.
+panels reported in #18 and #34 at the time.
+
+The driver previously wrote report 3 only to park on suspend, and the
+firmware keeps that value across a reprobe, so a parked panel stayed dark
+through every later probe while accepting frames. An attended control on a
+MacBookPro14,2 (0.1.12, lid open, hardware service stopped): park the panel
+from userspace, unload and load the unmodified driver, panel stays dark;
+unload and load a driver that writes the awake value after the probe-time
+clear, panel relights from probe alone, with no "Failed to wake" warning. The
+driver now writes the awake value after the probe-time and rearm-time clears.
+Whether this repairs the #18 suspend path, where the stock rearm likewise
+never wrote the awake value, is still to be observed on a unit that sleeps.
 
 ## Opt-in reply evidence
 
