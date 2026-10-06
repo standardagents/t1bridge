@@ -6,12 +6,12 @@
 #include <stddef.h>
 #include <stdio.h>
 
-enum step { CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, RESTORE };
+enum step { CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, WAKE, RESTORE };
 static const enum step recovery[] = {
-	CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, CLEAR, RESTORE,
+	CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, CLEAR, WAKE, RESTORE,
 };
 static enum step observed[sizeof(recovery) / sizeof(recovery[0])];
-static size_t calls, fail_at, errors;
+static size_t calls, fail_at, errors, warnings;
 static int failure;
 
 struct usb_device { int unused; };
@@ -83,6 +83,14 @@ static int drm_mode_config_helper_resume(struct drm_device *drm)
 	return perform(RESTORE);
 }
 
+/* The driver warns and continues when the awake write fails. */
+static void appletbdrm_t1_wake_display(struct appletbdrm_device *adev)
+{
+	(void)adev;
+	if (perform(WAKE))
+		++warnings;
+}
+
 #include "appletbdrm_resume.h"
 
 static void test_t1_resume(void)
@@ -96,13 +104,17 @@ static void test_t1_resume(void)
 			struct appletbdrm_device adev = { .t1 = true, .out_ep = 2, .in_ep = 5 };
 			struct usb_interface intf = { .data = &adev };
 
-			calls = errors = 0;
+			/* A failed awake write is reported, not fatal. */
+			bool fatal = failed && recovery[failed - 1] != WAKE;
+
+			calls = errors = warnings = 0;
 			fail_at = failed;
 			failure = failures[error];
-			assert(appletbdrm_resume(&intf) == (failed ? failure : 0));
-			assert(calls == (failed ? failed : count));
-			assert(intf.needs_binding == (failed != 0));
-			assert(errors == (failed != 0));
+			assert(appletbdrm_resume(&intf) == (fatal ? failure : 0));
+			assert(calls == (fatal ? failed : count));
+			assert(intf.needs_binding == fatal);
+			assert(errors == fatal);
+			assert(warnings == (failed && !fatal));
 			for (size_t i = 0; i < calls; ++i)
 				assert(observed[i] == recovery[i]);
 		}

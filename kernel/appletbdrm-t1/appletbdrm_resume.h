@@ -27,8 +27,12 @@ static int appletbdrm_t1_rearm(struct appletbdrm_device *adev)
 	ret = appletbdrm_clear_display(adev);
 	if (ret)
 		return ret;
+	ret = appletbdrm_clear_display(adev);
+	if (ret)
+		return ret;
 
-	return appletbdrm_clear_display(adev);
+	appletbdrm_t1_wake_display(adev);
+	return 0;
 }
 
 static int appletbdrm_resume(struct usb_interface *intf)

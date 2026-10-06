@@ -70,6 +70,41 @@ static bool appletbdrm_is_t1(struct appletbdrm_device *adev)
 	       APPLETBDRM_T1_PRODUCT_ID;
 }
 
+/*
+ * T1 display power is HID feature report 3 on the iBridge HID interface:
+ * byte 1 is 0x01 (parked, dark) or 0x02 (awake). The firmware keeps the
+ * value across reprobes and warm reboots, so a panel parked by a previous
+ * suspend, or left parked by firmware recovery, stays dark however many
+ * frames it accepts. Write the awake value wherever the panel is (re)armed.
+ */
+static int appletbdrm_t1_set_display_power(struct appletbdrm_device *adev,
+					   bool awake)
+{
+	static const u8 report[15] = { 0x03, 0x00, 0xf4, 0x01 };
+	struct usb_device *udev = adev_to_udev(adev);
+	u8 *buffer;
+	int ret;
+
+	buffer = kmemdup(report, sizeof(report), GFP_KERNEL);
+	if (!buffer)
+		return -ENOMEM;
+	buffer[1] = awake ? 0x02 : 0x01;
+
+	ret = usb_control_msg(udev, usb_sndctrlpipe(udev, 0), 0x09, 0x21,
+			      0x0303, APPLETBDRM_T1_HID_INTERFACE, buffer,
+			      sizeof(report), USB_CTRL_SET_TIMEOUT);
+	kfree(buffer);
+	return ret < 0 ? ret : 0;
+}
+
+static void appletbdrm_t1_wake_display(struct appletbdrm_device *adev)
+{
+	int ret = appletbdrm_t1_set_display_power(adev, true);
+
+	if (ret)
+		drm_warn(&adev->drm, "Failed to wake T1 display (%d)\n", ret);
+}
+
 struct appletbdrm_plane_state {
 	struct drm_shadow_plane_state base;
 	struct appletbdrm_fb_request *request;
@@ -594,6 +629,9 @@ static int appletbdrm_probe(struct usb_interface *intf,
 		return ret;
 	}
 
+	if (appletbdrm_is_t1(adev))
+		appletbdrm_t1_wake_display(adev);
+
 	return 0;
 }
 
@@ -619,23 +657,13 @@ static void appletbdrm_shutdown(struct usb_interface *intf)
 
 static void appletbdrm_t1_park(struct appletbdrm_device *adev)
 {
-	static const u8 report[15] = { 0x03, 0x01, 0xf4, 0x01 };
-	struct usb_device *udev = adev_to_udev(adev);
-	u8 *buffer;
 	int ret;
 
 	appletbdrm_clear_display(adev);
 	appletbdrm_clear_display(adev);
 
-	buffer = kmemdup(report, sizeof(report), GFP_KERNEL);
-	if (!buffer)
-		return;
-
-	ret = usb_control_msg(udev, usb_sndctrlpipe(udev, 0), 0x09, 0x21,
-			      0x0303, APPLETBDRM_T1_HID_INTERFACE, buffer,
-			      sizeof(report), USB_CTRL_SET_TIMEOUT);
-	kfree(buffer);
-	if (ret < 0)
+	ret = appletbdrm_t1_set_display_power(adev, false);
+	if (ret)
 		drm_warn(&adev->drm, "Failed to park T1 display (%d)\n", ret);
 
 	appletbdrm_clear_display(adev);
