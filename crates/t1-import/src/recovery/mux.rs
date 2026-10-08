@@ -11,8 +11,11 @@ use std::io;
 
 const INVALID: Error = Error("invalid or unsupported USB multiplexing packet");
 const CAPACITY: usize = 32 * 1024 * 1024;
+const _: () = assert!(plist::MAX_RESTORE_XML_SIZE + 4 <= CAPACITY);
 const MAX_PACKET: usize = 128 * 1024;
 const PAYLOAD: usize = 16_384 - 36;
+const HOST_MAGIC: u32 = 0xfeed_face;
+const DEVICE_MAGIC: u32 = 0xface_face;
 
 pub(super) trait Transport {
     fn send(&self, bytes: &[u8]) -> Result<()>;
@@ -149,9 +152,15 @@ impl<T: Transport> Mux<T> {
         let bytes = if little_endian {
             t1_bridge::bplist::encode(value).map_err(|_| INVALID)?
         } else {
-            plist::encode_xml(value)?
+            plist::encode_restore_xml(value)?
         };
         let size = u32::try_from(bytes.len()).map_err(|_| INVALID)?;
+        let channel = self.channel(port)?;
+        if bytes.len() + 4 > CAPACITY - channel.output.len() {
+            return Err(Error(
+                "restore message exceeds remaining mux queue capacity",
+            ));
+        }
         self.send(
             port,
             &if little_endian {
@@ -188,7 +197,11 @@ impl<T: Transport> Mux<T> {
             return Ok(None);
         }
         let bytes = self.take(port, length + 4)?.ok_or(INVALID)?;
-        Ok(Some(plist::decode(&bytes[4..])?))
+        let value = plist::decode(&bytes[4..]).inspect_err(|_| {
+            // The framing variant identifies the protocol without exposing ports or contents.
+            eprintln!("recovery: rejected mux plist: FDR framing={little_endian}");
+        })?;
+        Ok(Some(value))
     }
 
     pub fn available(&self, port: u16) -> Result<usize> {
@@ -258,10 +271,11 @@ impl<T: Transport> Mux<T> {
             }
             let packet: Vec<_> = self.bytes.drain(..length).collect();
             if self.version >= 2 {
-                if be32(&packet[8..12]) != 0xfeed_face {
+                if be32(&packet[8..12]) != DEVICE_MAGIC {
                     return Err(INVALID);
                 }
-                self.receive_sequence = be16(&packet[12..14]);
+                // Echo the device's rx_seq, as in the pinned usbmuxd transport.
+                self.receive_sequence = be16(&packet[14..16]);
             }
             match be32(&packet[..4]) {
                 0 if self.version == 0 && length == 20 => {
@@ -402,7 +416,7 @@ impl<T: Transport> Mux<T> {
                 .to_be_bytes(),
         );
         if self.version >= 2 {
-            packet.extend(0xfeed_face_u32.to_be_bytes());
+            packet.extend(HOST_MAGIC.to_be_bytes());
             packet.extend(self.send_sequence.to_be_bytes());
             packet.extend(self.receive_sequence.to_be_bytes());
             self.send_sequence = self.send_sequence.wrapping_add(1);
@@ -424,16 +438,86 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
+    #[derive(Default)]
     struct Wire {
         output: RefCell<Vec<Vec<u8>>>,
+        input: RefCell<VecDeque<Vec<u8>>>,
     }
     impl Transport for Wire {
         fn send(&self, bytes: &[u8]) -> Result<()> {
             self.output.borrow_mut().push(bytes.to_vec());
             Ok(())
         }
-        fn receive(&self, _: &mut [u8]) -> io::Result<usize> {
-            Err(io::ErrorKind::TimedOut.into())
+        fn receive(&self, bytes: &mut [u8]) -> io::Result<usize> {
+            let Some(packet) = self.input.borrow_mut().pop_front() else {
+                return Err(io::ErrorKind::TimedOut.into());
+            };
+            bytes[..packet.len()].copy_from_slice(&packet);
+            Ok(packet.len())
+        }
+    }
+
+    fn version(major: u32) -> Vec<u8> {
+        [0, 20, major, 0, 0]
+            .into_iter()
+            .flat_map(u32::to_be_bytes)
+            .collect()
+    }
+
+    fn device_frame(magic: u32, tx: u16, rx: u16, tcp: &[u8]) -> Vec<u8> {
+        let mut bytes = 6_u32.to_be_bytes().to_vec();
+        bytes.extend(u32::try_from(16 + tcp.len()).unwrap().to_be_bytes());
+        bytes.extend(magic.to_be_bytes());
+        bytes.extend(tx.to_be_bytes());
+        bytes.extend(rx.to_be_bytes());
+        bytes.extend(tcp);
+        bytes
+    }
+
+    #[test]
+    fn v2_handshake_uses_directional_magic_and_device_receive_sequence() {
+        let wire = Wire::default();
+        wire.input.borrow_mut().push_back(version(2));
+        let mut mux = Mux::new(wire).unwrap();
+        mux.poll().unwrap();
+        assert!(mux.ready());
+        let port = mux.connect(62078).unwrap();
+        // Synthetic SYN-ACK with TCP options, split across USB reads.
+        let mut tcp = packet(port, 42, 1, 0x12, &[]);
+        tcp[12] = 0x80;
+        tcp.extend([1; 12]);
+        let frame = device_frame(DEVICE_MAGIC, 41, 7, &tcp);
+        mux.transport
+            .input
+            .borrow_mut()
+            .extend([frame[..7].to_vec(), frame[7..].to_vec()]);
+        mux.poll().unwrap();
+        assert!(!mux.connected(port).unwrap());
+        mux.poll().unwrap();
+        assert!(mux.connected(port).unwrap());
+        let output = mux.transport.output.borrow();
+        let ack = output.last().unwrap();
+        assert_eq!(be32(&ack[8..12]), HOST_MAGIC);
+        assert_eq!(be16(&ack[14..16]), 7);
+        assert_eq!(be32(&ack[24..28]), 43);
+    }
+
+    #[test]
+    fn v2_rejects_host_direction_and_unknown_magic() {
+        for magic in [HOST_MAGIC, 0, 0xdead_beef] {
+            let wire = Wire::default();
+            wire.input.borrow_mut().push_back(version(2));
+            let mut mux = Mux::new(wire).unwrap();
+            mux.poll().unwrap();
+            let port = mux.connect(62078).unwrap();
+            mux.transport.input.borrow_mut().push_back(device_frame(
+                magic,
+                1,
+                2,
+                &packet(port, 0, 1, 0x12, &[]),
+            ));
+            assert!(mux.poll().is_err());
+            assert!(!mux.connected(port).unwrap());
         }
     }
 
@@ -452,6 +536,7 @@ mod tests {
     fn fragmented_channel_frames_and_sequence_errors() {
         let mut mux = Mux::new(Wire {
             output: RefCell::new(vec![]),
+            ..Wire::default()
         })
         .unwrap();
         mux.version = 2;
@@ -474,9 +559,29 @@ mod tests {
     }
 
     #[test]
+    fn firmware_frame_fits_queue_and_rejection_leaves_no_partial_prefix() {
+        let mut mux = Mux::new(Wire::default()).unwrap();
+        mux.version = 2;
+        let port = mux.connect(62078).unwrap();
+        mux.input_tcp(&packet(port, 0, 1, 0x12, &[])).unwrap();
+        let reply = plist::dict([("KernelCacheFile", Value::Data(vec![0x5a; 13 * 1024 * 1024]))]);
+        let xml = plist::encode_restore_xml(&reply).unwrap();
+        mux.send_plist(port, &reply, false).unwrap();
+        let before = mux.pending(port).unwrap();
+        assert_eq!(before, xml.len() + 4);
+        assert!(mux.send_plist(port, &reply, false).is_err());
+        assert_eq!(mux.pending(port).unwrap(), before);
+        let channel = mux.channel(port).unwrap();
+        let bytes: Vec<_> = channel.output.iter().copied().collect();
+        assert_eq!(be32(&bytes[..4]) as usize, xml.len());
+        assert_eq!(&bytes[4..], &xml);
+    }
+
+    #[test]
     fn refuses_oversize_frame_before_allocation() {
         let mut mux = Mux::new(Wire {
             output: RefCell::new(vec![]),
+            ..Wire::default()
         })
         .unwrap();
         mux.version = 1;

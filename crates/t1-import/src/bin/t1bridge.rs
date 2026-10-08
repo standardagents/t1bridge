@@ -38,6 +38,7 @@ enum Command {
     AutomaticImport,
     BackupImport(PathBuf),
     OnlineRecovery(PathBuf),
+    ResumeBoot(PathBuf),
     Enroll,
     Match,
     Status,
@@ -62,7 +63,7 @@ fn main() -> ExitCode {
     }
     let Some(command) = parse_command(arguments) else {
         eprintln!(
-            "usage: t1bridge [--diagnostics] machine-data import [--from ABSOLUTE_PATH] | machine-data recover --online --efi ABSOLUTE_ESP_PATH | enroll | match | status | validate usb-cycle | validate usb-live-loss"
+            "usage: t1bridge [--diagnostics] machine-data import [--from ABSOLUTE_PATH] | machine-data recover (--online | --resume-boot) --efi ABSOLUTE_ESP_PATH | enroll | match | status | validate usb-cycle | validate usb-live-loss"
         );
         return ExitCategory::Usage.into();
     };
@@ -122,7 +123,7 @@ where
         (Some(group), Some(command), Some(option))
             if group == OsStr::new("machine-data")
                 && command == OsStr::new("recover")
-                && option == OsStr::new("--online") =>
+                && (option == OsStr::new("--online") || option == OsStr::new("--resume-boot")) =>
         {
             if arguments.next()? != OsStr::new("--efi") {
                 return None;
@@ -131,7 +132,11 @@ where
             if !path.is_absolute() || arguments.next().is_some() {
                 return None;
             }
-            Some(Command::OnlineRecovery(path))
+            Some(if option == OsStr::new("--resume-boot") {
+                Command::ResumeBoot(path)
+            } else {
+                Command::OnlineRecovery(path)
+            })
         }
         (Some(group), Some(command), Some(option))
             if group == OsStr::new("machine-data")
@@ -177,6 +182,9 @@ fn run(command: Command) -> Result<(), CommandError> {
         Command::OnlineRecovery(path) => {
             t1_import::recovery::run(&path).map_err(CommandError::Recovery)
         }
+        Command::ResumeBoot(path) => {
+            t1_import::recovery::resume_boot(&path).map_err(CommandError::Recovery)
+        }
         Command::Enroll => {
             t1_daemons::auth_client::run(TouchIdCommand::Enroll).map_err(CommandError::TouchId)
         }
@@ -199,6 +207,7 @@ const fn authority_allows(command: &Command, is_root: bool) -> bool {
         Command::AutomaticImport
         | Command::BackupImport(_)
         | Command::OnlineRecovery(_)
+        | Command::ResumeBoot(_)
         | Command::Status
         | Command::UsbCycle
         | Command::UsbLiveLoss => is_root,
@@ -211,7 +220,7 @@ const fn authority_error(command: &Command) -> &'static str {
         Command::AutomaticImport | Command::BackupImport(_) => {
             "machine-data import requires root authority"
         }
-        Command::OnlineRecovery(_) => "online recovery requires root authority",
+        Command::OnlineRecovery(_) | Command::ResumeBoot(_) => "recovery requires root authority",
         Command::Enroll => "enrollment requires a non-root user",
         Command::Match => "matching requires a non-root user",
         Command::Status => "status requires root authority",
@@ -297,6 +306,37 @@ mod tests {
         ] {
             assert!(parse_command(arguments(&args)).is_none());
         }
+    }
+
+    #[test]
+    fn saved_boot_is_explicit_and_requires_root() {
+        let command = parse_command(arguments(&[
+            "t1bridge",
+            "machine-data",
+            "recover",
+            "--resume-boot",
+            "--efi",
+            "/synthetic-esp",
+        ]))
+        .unwrap();
+        assert_eq!(
+            command,
+            Command::ResumeBoot(PathBuf::from("/synthetic-esp"))
+        );
+        assert!(authority_allows(&command, true));
+        assert!(!authority_allows(&command, false));
+        assert!(
+            parse_command(arguments(&[
+                "t1bridge",
+                "machine-data",
+                "recover",
+                "--resume-boot",
+                "--online",
+                "--efi",
+                "/synthetic-esp"
+            ]))
+            .is_none()
+        );
     }
 
     fn arguments(values: &[&str]) -> Vec<OsString> {

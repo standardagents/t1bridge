@@ -84,6 +84,40 @@ impl SignedFirmware {
     }
 }
 
+#[cfg(test)]
+impl SignedFirmware {
+    pub(super) fn synthetic(firmware: &Firmware) -> Result<Self> {
+        // A deliberately synthetic DER ticket, larger than typical real tickets.
+        let ticket = wrap(0x30, &wrap(4, &vec![0x5a; 16 * 1024]));
+        let components: std::collections::BTreeMap<String, Vec<u8>> = [
+            "OSRamdisk",
+            "KernelCache",
+            "DeviceTree",
+            "LLB",
+            "iBoot",
+            "SEP",
+            "RestoreSEP",
+        ]
+        .into_iter()
+        .map(|name| {
+            Ok((
+                name.into(),
+                personalize(name, firmware.component(name)?, &ticket)?,
+            ))
+        })
+        .collect::<Result<_>>()?;
+        let mut combined = Vec::new();
+        for name in ["OSRamdisk", "KernelCache", "DeviceTree", "SEP"] {
+            combined.extend_from_slice(components.get(name).ok_or(INVALID)?);
+        }
+        Ok(Self {
+            ticket,
+            combined,
+            components,
+        })
+    }
+}
+
 fn signing_request(identity: &Value, device: &Identity) -> Result<Value> {
     let Value::Dictionary(mut request) = plist::dict([
         ("@HostPlatformInfo", plist::string("mac")),

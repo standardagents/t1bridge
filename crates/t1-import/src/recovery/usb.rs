@@ -334,7 +334,8 @@ impl Usb {
         }
         let mut bytes = command.as_bytes().to_vec();
         bytes.push(0);
-        let count = self.control(
+        let transfer = recovery_io::usb_control(
+            self.file.as_fd(),
             Control {
                 kind: 0x40,
                 request: u8::from(blind),
@@ -343,11 +344,8 @@ impl Usb {
             },
             &mut bytes,
             10_000,
-        )?;
-        if count != bytes.len() {
-            return Err(Error("short iBoot command transfer"));
-        }
-        Ok(())
+        );
+        command_transfer_result(command, blind, bytes.len(), transfer)
     }
 
     pub fn upload(&self, bytes: &[u8]) -> Result<()> {
@@ -393,6 +391,43 @@ impl Drop for Usb {
     }
 }
 
+fn command_transfer_result(
+    command: &str,
+    blind: bool,
+    expected: usize,
+    transfer: io::Result<usize>,
+) -> Result<()> {
+    match transfer {
+        Ok(count) if count == expected => Ok(()),
+        Ok(_) => Err(Error("short iBoot command transfer")),
+        Err(error)
+            if error.raw_os_error() == Some(32)
+                && matches!(
+                    (command, blind),
+                    ("rsepfirmware" | "ticket", false) | ("memboot", true)
+                ) =>
+        {
+            // The reference command transport does not require an ACK here.
+            // Restrict EPIPE tolerance to the observed SEP/ticket stalls and
+            // final blind memboot. This only permits the next validation step:
+            // restore status or stable functional USB must still prove success.
+            match command {
+                "rsepfirmware" => eprintln!(
+                    "recovery: rsepfirmware stalled; continuing to required restore validation"
+                ),
+                "ticket" => eprintln!(
+                    "recovery: ticket command stalled; continuing to required functional boot validation"
+                ),
+                _ => eprintln!(
+                    "recovery: blind memboot stalled; checking required functional USB state"
+                ),
+            }
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn field<'a>(text: &'a str, name: &str) -> Result<&'a str> {
     let prefix = format!("{name}:");
     let mut values = text
@@ -426,6 +461,46 @@ fn parse_identity(serial: &str, nonce: &str) -> Result<Identity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_scoped_commands_accept_a_pipe_stall() {
+        let pipe = || Err(io::Error::from_raw_os_error(32));
+        for (command, blind) in [
+            ("rsepfirmware", false),
+            ("ticket", false),
+            ("memboot", true),
+        ] {
+            assert!(command_transfer_result(command, blind, 8, pipe()).is_ok());
+            assert!(command_transfer_result(command, !blind, 8, pipe()).is_err());
+            for errno in [5, 19, 71, 110] {
+                assert!(
+                    command_transfer_result(
+                        command,
+                        blind,
+                        8,
+                        Err(io::Error::from_raw_os_error(errno))
+                    )
+                    .is_err()
+                );
+            }
+        }
+        for command in ["ramdisk", "devicetree", "saveenv", "go", "bootx"] {
+            for blind in [false, true] {
+                assert!(command_transfer_result(command, blind, 8, pipe()).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn command_transfers_still_require_the_complete_payload() {
+        for command in ["rsepfirmware", "ticket", "memboot", "ramdisk", "go"] {
+            let expected = command.len() + 1;
+            assert!(command_transfer_result(command, false, expected, Ok(expected)).is_ok());
+            for count in [0, expected - 1, expected + 1] {
+                assert!(command_transfer_result(command, false, expected, Ok(count)).is_err());
+            }
+        }
+    }
 
     #[test]
     fn identity_requires_t1_board_and_unambiguous_nonces() {

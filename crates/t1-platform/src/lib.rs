@@ -10,6 +10,10 @@ pub mod recovery_io;
 
 #[cfg(feature = "online-recovery")]
 #[allow(unsafe_code)]
+pub mod recovery_https;
+
+#[cfg(feature = "online-recovery")]
+#[allow(unsafe_code)]
 pub mod recovery_fs;
 
 #[cfg(feature = "frame-memfd")]

@@ -23,14 +23,19 @@ failure blocks online recovery. Try a verified same-Mac backup with the local
 import command first. Recovery requires a supported T1 Mac already in USB
 recovery mode and an explicit `RECOVER` confirmation on an attended terminal.
 Apple receives the T1's identity and signing nonces during signing. Factory
-recovery uses device TLS tunnels to public Apple HTTPS endpoints.
+recovery uses device TLS tunnels to public Apple HTTPS endpoints. The exact
+legacy request for `gg.apple.com:80` is instead connected to `gg.apple.com:443`
+using host-side TLS with peer and hostname verification. No plaintext network
+fallback is permitted; other device TLS tunnels remain opaque.
 
 The native sequence verifies the pinned Apple firmware package, provisions FDR,
 resets only the T1, replays the recovered store in a second restore, resets the
 T1 again, and boots the image and ticket from that second signing transaction.
-It requires successful final restore status, a durable FDR commit, matching
-replayed data and 30 seconds of stable functional USB configuration. Only then
-does it save all three EFI files in a staged directory, flush and verify them,
+Each FDR commit is saved as a bounded immutable snapshot before acknowledgment;
+only successful final restore status selects the final store. Personalization's
+final store must match provisioning's final store, even if intermediate snapshots
+differ. The flow also requires 30 seconds of stable functional USB configuration.
+Only then does it save all three EFI files in a staged directory, flush and verify them,
 rename the complete directory without replacing existing data, and run the
 sensor-matching local importer.
 
@@ -44,10 +49,49 @@ last printed stage and error, package versions and model instead.
 The initial implementation does not repartition device storage, enter DFU, reset
 a functional T1, replace existing EFI generations, or automatically recover
 interrupted attempts. Unknown restore requests fail explicitly. Apple service
-availability and full device behavior remain unverified. Track native acceptance
+availability and full model acceptance remain incomplete. A
+[MacBookPro14,2 report](recovery-macbookpro14-2-report.md) records successful
+recovery using local changes and a separate trust environment; it does not
+establish unmodified signed-package acceptance. Track native acceptance
 in [#43](https://github.com/standardagents/t1bridge/issues/43): generated-data
 import/calibration load, enrollment, match/non-match, warm/cold boot, Touch Bar,
 camera and ALS. Existing local recovery did not require erasing EFI for a test.
+
+## Explicit final-boot retry (experimental)
+
+This branch adds an attended retry for a narrow failure: both native restore
+phases completed successfully and retained consistent protected artifacts, but
+final boot did not complete. It is not general interrupted-restore recovery and
+is not available in the v0.1.12 signed executable.
+
+```sh
+sudo t1bridge machine-data recover --resume-boot --efi /path/to/mounted-esp
+```
+
+Before requesting `RECOVER`, this path checks the retained attempt and success
+markers, nonempty matching final FDR stores, matching ticket identities, all four
+image/ticket pairs, and the EFI destination. The device must already be in
+recovery mode with no functional HID personality. The connected identity is
+checked before firmware upload. Existing EFI/staging, an already verified boot,
+or incomplete/inconsistent artifacts block the operation. Do not fabricate
+markers, delete attempts or reset a functional device to make it eligible.
+
+It makes no Apple network requests, performs no new restore or hardware reset,
+and repeats only final boot. The usual stable functional USB gate still precedes
+EFI publication and sensor-matched import. Retained-ticket parsing checks
+consistency, not an offline cryptographic ticket signature; device-side firmware
+verification remains required. A failure after boot verification requires
+inspection rather than an automatic retry.
+
+## Trust-policy gap in the reported recovery
+
+The successful hardware session used separately verified Apple trust anchors in
+a process-scoped mount namespace. Those local wrappers, anchors and privileged
+retry controllers are not part of this source contribution. Neither this branch
+nor its documentation installs roots, disables certificate validation or changes
+the global trust store. A reviewed, reproducible trust-distribution policy remains
+necessary before claiming the packaged online flow works in the default Linux
+trust environment. The HTTPS transport change alone does not close that gap.
 
 ## Dependencies and privilege boundary
 

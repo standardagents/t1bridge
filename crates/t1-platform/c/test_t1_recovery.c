@@ -8,6 +8,15 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <curl/curl.h>
+
+static int mock_connect;
+static CURLcode mock_result;
+CURLcode __real_curl_easy_perform(CURL *curl);
+CURLcode __wrap_curl_easy_perform(CURL *curl)
+{
+    return mock_connect ? mock_result : __real_curl_easy_perform(curl);
+}
 
 int main(void)
 {
@@ -19,6 +28,29 @@ int main(void)
     /* Protocol refusal is tested without connecting to any endpoint. */
     assert(t1_recovery_https("file:///synthetic", NULL, 0, output, sizeof(output), &size) != 0);
     assert(t1_recovery_usb_bulk(-1, 1, output, sizeof(output), 1, &size) == EBADF);
+
+    void *tls = NULL;
+    assert(t1_fdr_https_open("synthetic.apple.com", &tls) == EINVAL);
+    assert(tls == NULL);
+    assert(t1_fdr_https_open("127.0.0.1:80", &tls) == EINVAL);
+    assert(t1_fdr_https_open("127.0.0.1\n", &tls) == EINVAL);
+    assert(t1_fdr_https_read(NULL, output, sizeof(output), &size) == EINVAL);
+    assert(t1_fdr_https_write(NULL, output, sizeof(output), &size) == EINVAL);
+    const struct { CURLcode status; int error; } failures[] = {
+        {CURLE_OPERATION_TIMEDOUT, ETIMEDOUT},
+        {CURLE_COULDNT_CONNECT, ECONNREFUSED},
+        {CURLE_PEER_FAILED_VERIFICATION, EACCES},
+        {CURLE_SSL_CACERT_BADFILE, EACCES},
+        {CURLE_SSL_CONNECT_ERROR, EPROTO},
+        {CURLE_OUT_OF_MEMORY, ENOMEM}
+    };
+    mock_connect = 1;
+    for (size_t i = 0; i < sizeof(failures)/sizeof(failures[0]); ++i) {
+        mock_result = failures[i].status;
+        assert(t1_fdr_https_open("192.0.2.1", &tls) == failures[i].error);
+        assert(tls == NULL);
+    }
+    mock_connect = 0;
 
     char path[] = "/tmp/t1-recovery-synthetic.XXXXXX";
     assert(mkdtemp(path));

@@ -1,6 +1,8 @@
 //! FDR control and bounded device TLS tunnels to Apple's public HTTPS hosts.
 //! These outbound sockets exist only while an attended restore owns the USB
-//! interface. The device performs its own TLS; host code never decrypts FDR.
+//! interface. Device TLS is passed through. Only the legacy gg.apple.com:80
+//! request is upgraded to host-verified TLS on port 443; plaintext never leaves
+//! the computer. No tunneled payload is logged.
 
 use super::{
     Error, Result,
@@ -9,8 +11,9 @@ use super::{
 };
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
+use t1_platform::recovery_https::FdrHttps;
 
 const INVALID: Error = Error("invalid or unsupported FDR protocol message");
 
@@ -28,7 +31,7 @@ enum State {
 struct Worker {
     state: State,
     greeted: bool,
-    socket: Option<TcpStream>,
+    socket: Option<FdrSocket>,
     pending: Vec<u8>,
     written: usize,
     active: Instant,
@@ -259,6 +262,36 @@ impl Worker {
     }
 }
 
+enum FdrSocket {
+    DeviceTls(TcpStream),
+    HostTls(FdrHttps),
+}
+
+impl Read for FdrSocket {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::DeviceTls(socket) => socket.read(bytes),
+            Self::HostTls(socket) => socket.read(bytes),
+        }
+    }
+}
+
+impl Write for FdrSocket {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::DeviceTls(socket) => socket.write(bytes),
+            Self::HostTls(socket) => socket.write(bytes),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn upgrade_to_https(host: &str, port: u16) -> bool {
+    host == "gg.apple.com" && port == 80
+}
+
 fn allowed_host(host: &str, port: u16) -> bool {
     port == 443
         && host.len() <= 253
@@ -295,23 +328,118 @@ fn public_address(address: IpAddr) -> bool {
     }
 }
 
-fn connect_apple(host: &str, port: u16) -> Result<TcpStream> {
-    if !allowed_host(host, port) {
+fn connect_apple(host: &str, port: u16) -> Result<FdrSocket> {
+    let upgrade = upgrade_to_https(host, port);
+    if !upgrade && !allowed_host(host, port) {
+        // Print only protocol metadata and fixed public service names. A
+        // device-supplied hostname can contain an identifier; never echo it.
+        let normalized = host.trim_end_matches(['\0', '.']).to_ascii_lowercase();
+        let known = known_service(&normalized);
+        eprintln!("recovery: rejected FDR destination: known_service={known} port={port}");
+        eprintln!(
+            "recovery: FDR host metadata: bytes={} ascii={} trailing_nul={} trailing_dot={} normalized_apple_https={}",
+            host.len(),
+            host.is_ascii(),
+            host.ends_with('\0'),
+            host.ends_with('.'),
+            allowed_host(&normalized, 443)
+        );
         return Err(Error(
-            "FDR requested a destination outside Apple's HTTPS service",
+            "FDR requested a destination outside the allowed Apple services",
         ));
     }
-    let addresses: Vec<_> = (host, port).to_socket_addrs()?.take(8).collect();
+    // Every outbound connection uses 443, including the legacy-device request.
+    let addresses: Vec<_> = (host, 443).to_socket_addrs()?.take(8).collect();
     if addresses.is_empty() || addresses.iter().any(|a| !public_address(a.ip())) {
         return Err(Error("FDR destination did not resolve to a public address"));
     }
-    for address in addresses {
-        if let Ok(socket) = TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
+    let known = known_service(host);
+    eprintln!(
+        "recovery: connecting FDR service: known_service={known} requested_port={port} host_tls={upgrade} public_addresses={}",
+        addresses.len()
+    );
+    connect_candidates(&addresses, Duration::from_secs(30), |address| {
+        if upgrade {
+            let socket = FdrHttps::connect(address.ip())?;
+            println!(
+                "recovery: gg.apple.com legacy request upgraded to verified HTTPS on port 443"
+            );
+            Ok(FdrSocket::HostTls(socket))
+        } else {
+            let socket = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
             socket.set_nonblocking(true)?;
-            return Ok(socket);
+            Ok(FdrSocket::DeviceTls(socket))
+        }
+    })
+    .map_err(|error| {
+        eprintln!(
+            "recovery: FDR connection failed: known_service={known} error_kind={:?} errno={:?}",
+            error.kind(),
+            error.raw_os_error()
+        );
+        Error("unable to connect to Apple's FDR service")
+    })
+}
+
+fn known_service(host: &str) -> &'static str {
+    match host {
+        "gg.apple.com" => "gg.apple.com",
+        "gs.apple.com" => "gs.apple.com",
+        "albert.apple.com" => "albert.apple.com",
+        "skl.apple.com" => "skl.apple.com",
+        "humb.apple.com" => "humb.apple.com",
+        "tbsc.apple.com" => "tbsc.apple.com",
+        "static.ips.apple.com" => "static.ips.apple.com",
+        _ => "unlisted (withheld)",
+    }
+}
+
+// Retry only before returning a connected socket: no device request bytes have
+// been forwarded yet. Never replay a request after a tunnel write/read failure.
+fn connect_candidates<S>(
+    addresses: &[SocketAddr],
+    timeout: Duration,
+    mut connect: impl FnMut(SocketAddr) -> io::Result<S>,
+) -> io::Result<S> {
+    let deadline = Instant::now() + timeout;
+    let mut last = io::Error::from(io::ErrorKind::TimedOut);
+    for round in 0..2 {
+        for address in addresses {
+            if Instant::now() >= deadline {
+                return Err(last);
+            }
+            match connect(*address) {
+                Ok(socket) => return Ok(socket),
+                Err(error) => {
+                    eprintln!(
+                        "recovery: FDR connection attempt failed: round={} error_kind={:?} errno={:?}",
+                        round + 1,
+                        error.kind(),
+                        error.raw_os_error()
+                    );
+                    if !retryable_connection_error(error.kind()) {
+                        return Err(error);
+                    }
+                    last = error;
+                }
+            }
         }
     }
-    Err(Error("unable to connect to Apple's FDR service"))
+    Err(last)
+}
+
+fn retryable_connection_error(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::TimedOut
+            | io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::NetworkUnreachable
+            | io::ErrorKind::HostUnreachable
+            | io::ErrorKind::AddrNotAvailable
+            | io::ErrorKind::Interrupted
+    )
 }
 
 #[cfg(test)]
@@ -319,8 +447,83 @@ mod tests {
     use super::*;
 
     #[test]
-    fn proxy_allows_only_public_apple_https_destinations() {
+    fn connection_retry_is_bounded_and_never_retries_trust_failure() {
+        let addresses = ["192.0.2.1:443".parse().unwrap()];
+        let mut calls = 0;
+        let result = connect_candidates(&addresses, Duration::from_secs(1), |_| {
+            calls += 1;
+            if calls == 1 {
+                Err(io::ErrorKind::TimedOut.into())
+            } else {
+                Ok(7)
+            }
+        })
+        .unwrap();
+        assert_eq!((result, calls), (7, 2));
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::InvalidData] {
+            let mut calls = 0;
+            let result: io::Result<()> =
+                connect_candidates(&addresses, Duration::from_secs(1), |_| {
+                    calls += 1;
+                    Err(kind.into())
+                });
+            assert!(result.is_err());
+            assert_eq!(calls, 1);
+        }
+        let mut calls = 0;
+        let result: io::Result<()> = connect_candidates(&addresses, Duration::from_secs(1), |_| {
+            calls += 1;
+            Err(io::ErrorKind::ConnectionRefused.into())
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 2);
+        let result: io::Result<()> = connect_candidates(&addresses, Duration::ZERO, |_| {
+            panic!("expired connection budget")
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            known_service("synthetic-private.apple.com"),
+            "unlisted (withheld)"
+        );
+    }
+
+    #[test]
+    fn only_exact_legacy_bootstrap_destination_gets_a_tls_upgrade() {
+        assert!(upgrade_to_https("gg.apple.com", 80));
+        for host in [
+            "gg.apple.com.attacker.invalid",
+            "synthetic.gg.apple.com",
+            "gg.apple.com.",
+            "gg.apple.com\0",
+            "GG.apple.com",
+            "gs.apple.com",
+            "127.0.0.1",
+        ] {
+            assert!(!upgrade_to_https(host, 80));
+        }
+        for port in [0, 22, 81, 443, 8080, 8443] {
+            assert!(!upgrade_to_https("gg.apple.com", port));
+        }
+    }
+
+    #[test]
+    fn proxy_rejects_plaintext_and_non_apple_destinations() {
         assert!(allowed_host("synthetic.fdr.apple.com", 443));
+        assert!(!allowed_host("gg.apple.com", 80));
+        assert!(allowed_host("gg.apple.com", 443));
+        for host in [
+            "gg.apple.com.attacker.invalid",
+            "synthetic.gg.apple.com",
+            "gg.apple.com.",
+            "gg.apple.com\0",
+            "GG.apple.com",
+            "gs.apple.com",
+        ] {
+            assert!(!allowed_host(host, 80));
+        }
+        for port in [0, 22, 81, 8080, 8443] {
+            assert!(!allowed_host("gg.apple.com", port));
+        }
         for host in [
             "apple.com.attacker.invalid",
             "localhost",

@@ -43,6 +43,15 @@ An unavailable, not-ready, not-enrolled, or unexpected component is a reported
 state and does not itself change the command's success exit. The command exits
 nonzero only when a row cannot be inspected safely.
 
+## Additional recovery evidence
+
+The [September 23–24 MacBookPro14,2 report](recovery-macbookpro14-2-report.md)
+records patched recovery and subsequent hardware checks, with deviations from
+[#43](https://github.com/standardagents/t1bridge/issues/43) explicit. Its warm/cold
+boot and biometric passes do not establish signed-release or multi-model
+acceptance. Hibernation-associated biometric failure and 720p preview usability
+remain unresolved. No new hardware tests were performed to prepare this report.
+
 ## Readiness handshake
 
 Before any timed or owner-interactive step, the executing agent states the

@@ -9,7 +9,9 @@ mod firmware;
 mod mux;
 mod plist;
 mod restore;
+mod saved;
 mod signing;
+pub use saved::resume_boot;
 mod storage;
 mod usb;
 
@@ -61,7 +63,7 @@ pub fn run(efi: &Path) -> Result<()> {
     recovery_io::reset(reset.as_fd(), device.bus, device.address, false)
         .map_err(|_| Error("a unique T1-only ACPI reset method could not be validated"))?;
     let destination = storage::EfiDestination::open(efi)?;
-    confirm()?;
+    confirm(false)?;
     println!("recovery: downloading and verifying Apple's pinned firmware");
     let firmware = firmware::Firmware::download()?;
     storage::require_local_absence()?;
@@ -111,7 +113,7 @@ pub fn run(efi: &Path) -> Result<()> {
     Ok(())
 }
 
-fn confirm() -> Result<()> {
+fn confirm(resume: bool) -> Result<()> {
     let mut terminal = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -120,7 +122,12 @@ fn confirm() -> Result<()> {
     if !terminal.is_terminal() {
         return Err(Error("online recovery requires an attended terminal"));
     }
-    terminal.write_all(b"Experimental T1 online recovery. Apple will receive this T1's identity and signing nonces.\nThis runs two firmware restores and saves recovered EFI data. Keep the Mac powered and awake.\nUse preserved local data or a verified same-Mac backup first.\nType RECOVER after confirming neither is available: ")?;
+    if resume {
+        terminal.write_all(b"Experimental T1 final-boot retry using two completed, matching local restore phases.\nNo restore or network request is repeated. Successful functional boot permits EFI publication and local import.\nKeep the Mac powered and awake.\nType RECOVER after confirming neither is available: ")?;
+    } else {
+        terminal.write_all(b"Experimental T1 online recovery. Apple will receive this T1's identity and signing nonces.\nThis runs two firmware restores and saves recovered EFI data. Keep the Mac powered and awake.\nUse preserved local data or a verified same-Mac backup first.\nType RECOVER after confirming neither is available: ")?;
+    }
+
     terminal.flush()?;
     let mut answer = Vec::new();
     for _ in 0..64 {
@@ -153,7 +160,11 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl From<std::io::Error> for Error {
-    fn from(_: std::io::Error) -> Self {
+    fn from(error: std::io::Error) -> Self {
+        // Log only a kernel error number, never paths or device-supplied text.
+        if let Some(errno) = error.raw_os_error() {
+            eprintln!("recovery: operating-system error number {errno}");
+        }
         Self("recovery input/output failed")
     }
 }

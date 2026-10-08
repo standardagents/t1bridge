@@ -24,8 +24,8 @@ SANITIZER_CFLAGS := -O1 -g -std=c17 -Wall -Wextra -Wpedantic -Werror \
 
 all: $(TEST_BINARIES)
 
-$(BUILD_DIR)/test_t1_recovery: t1_recovery_io.c t1_recovery_io.h t1_recovery_fs.c t1_recovery_fs.h test_t1_recovery.c | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) t1_recovery_io.c t1_recovery_fs.c test_t1_recovery.c -lcurl -larchive -lcrypto -ludev -o $@
+$(BUILD_DIR)/test_t1_recovery: t1_recovery_io.c t1_fdr_https.c t1_recovery_io.h t1_recovery_fs.c t1_recovery_fs.h test_t1_recovery.c | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) t1_recovery_io.c t1_fdr_https.c t1_recovery_fs.c test_t1_recovery.c -Wl,--wrap=curl_easy_perform -lcurl -larchive -lcrypto -ludev -o $@
 
 $(BUILD_DIR)/test_t1_secret_wipe: t1_secret_wipe.c t1_secret_wipe.h test_t1_secret_wipe.c | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) t1_secret_wipe.c test_t1_secret_wipe.c -o $@

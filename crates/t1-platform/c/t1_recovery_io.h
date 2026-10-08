@@ -11,4 +11,8 @@ int t1_recovery_usb_configuration(int, unsigned int);
 int t1_recovery_usb_control(int, uint8_t, uint8_t, uint16_t, uint16_t, unsigned char *, uint16_t, unsigned int, size_t *);
 int t1_recovery_usb_bulk(int, unsigned int, unsigned char *, size_t, unsigned int, size_t *);
 int t1_recovery_reset(int, uint32_t, uint32_t, int);
+int t1_fdr_https_open(const char *, void **);
+int t1_fdr_https_read(void *, unsigned char *, size_t, size_t *);
+int t1_fdr_https_write(void *, const unsigned char *, size_t, size_t *);
+void t1_fdr_https_close(void *);
 #endif

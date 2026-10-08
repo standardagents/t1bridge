@@ -113,7 +113,7 @@ fn compile_recovery(objects: &mut Vec<PathBuf>, compiler: &OsStr, manifest: &Pat
     if env::var_os("CARGO_FEATURE_ONLINE_RECOVERY").is_none() {
         return;
     }
-    for name in ["t1_recovery_fs", "t1_recovery_io"] {
+    for name in ["t1_recovery_fs", "t1_recovery_io", "t1_fdr_https"] {
         objects.push(compile(
             compiler,
             &manifest.join(format!("c/{name}.c")),
