@@ -16,6 +16,12 @@ not an illumination measurement; accepted unpark writes did not relight the
 reported panels. The next experiment is observation, not another reset or
 speculative power write.
 
+On a MacBookPro14,3 in s2idle, the panel stayed parked (report 3 mode 1)
+after every resume, and an unpark followed by fresh frames relit it. Resume
+now ends the rearm with that unpark, before the DRM state is restored. This
+was observed on s2idle only; the 14,2 S3 reports above, where the same write
+did not relight, remain open.
+
 ## Opt-in reply evidence
 
 The following diagnostic records require **v0.1.11 or newer**. They are not

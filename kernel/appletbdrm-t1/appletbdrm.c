@@ -641,6 +641,30 @@ static void appletbdrm_t1_park(struct appletbdrm_device *adev)
 	appletbdrm_clear_display(adev);
 }
 
+/*
+ * Undo appletbdrm_t1_park() after system sleep. The T1 keeps the panel parked
+ * (report 3 mode 1) across resume, and the rearm handshake alone does not
+ * change that, so the panel stays dark until the mode is set back to 2.
+ */
+static int appletbdrm_t1_unpark(struct appletbdrm_device *adev)
+{
+	static const u8 report[15] = { 0x03, 0x02 };
+	struct usb_device *udev = adev_to_udev(adev);
+	u8 *buffer;
+	int ret;
+
+	buffer = kmemdup(report, sizeof(report), GFP_KERNEL);
+	if (!buffer)
+		return -ENOMEM;
+
+	ret = usb_control_msg(udev, usb_sndctrlpipe(udev, 0), 0x09, 0x21,
+			      0x0303, APPLETBDRM_T1_HID_INTERFACE, buffer,
+			      sizeof(report), USB_CTRL_SET_TIMEOUT);
+	kfree(buffer);
+
+	return ret < 0 ? ret : 0;
+}
+
 static int appletbdrm_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	struct appletbdrm_device *adev = usb_get_intfdata(intf);

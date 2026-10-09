@@ -6,9 +6,9 @@
 #include <stddef.h>
 #include <stdio.h>
 
-enum step { CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, RESTORE };
+enum step { CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, UNPARK, RESTORE };
 static const enum step recovery[] = {
-	CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, CLEAR, RESTORE,
+	CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, CLEAR, UNPARK, RESTORE,
 };
 static enum step observed[sizeof(recovery) / sizeof(recovery[0])];
 static size_t calls, fail_at, errors;
@@ -75,6 +75,12 @@ static int appletbdrm_clear_display(struct appletbdrm_device *adev)
 {
 	(void)adev;
 	return perform(CLEAR);
+}
+
+static int appletbdrm_t1_unpark(struct appletbdrm_device *adev)
+{
+	(void)adev;
+	return perform(UNPARK);
 }
 
 static int drm_mode_config_helper_resume(struct drm_device *drm)
