@@ -305,7 +305,13 @@ hook and removal instructions. Remove an old hook only after verifying that
 it points to this package's helper, to avoid a second restart at login.
 
 The core renderer starts with the user manager and can precede the graphical
-session. The optional integration skips a start with an absent or empty
+session. It is also wanted by `graphical-session.target`, so a later login
+starts it again when the user manager outlived the previous logout (another
+session of the same user, such as SSH, keeps the manager alive; the renderer
+itself stops with the session). Installs enabled before this change need
+`systemctl --user enable t1-touchbar.service` once to add that link.
+
+The optional integration skips a start with an absent or empty
 display environment, then invokes the packaged helper through XDG autostart
 after graphical-session readiness. It imports the required desktop variables
 and starts or restarts only an enabled renderer. Disabled/masked units and

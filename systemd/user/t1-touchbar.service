@@ -11,4 +11,7 @@ UMask=0077
 NoNewPrivileges=yes
 
 [Install]
-WantedBy=default.target
+# default.target starts the renderer with a fresh user manager;
+# graphical-session.target starts it again for each later graphical session
+# when the manager outlives a logout (PartOf stops it with the session).
+WantedBy=default.target graphical-session.target
