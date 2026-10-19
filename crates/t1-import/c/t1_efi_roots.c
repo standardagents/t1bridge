@@ -317,7 +317,9 @@ static int open_mount_path(const char *path)
 static int bind_existing_mount(const struct t1_efi_test_candidate *candidate,
 	const char *mountpoint, unsigned long flags, int *mounted)
 {
-	FILE *inventory = fopen("/proc/self/mountinfo", "re");
+	/* Discovery may run on a worker after unshare(CLONE_NEWNS). The
+	 * inventory must describe that thread, not the main thread namespace. */
+	FILE *inventory = fopen("/proc/thread-self/mountinfo", "re");
 	char line[16384];
 	char path[PATH_MAX];
 	int status = T1_EFI_ROOTS_INSPECTION_FAILED;

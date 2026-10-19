@@ -23,13 +23,16 @@ failure blocks online recovery. Try a verified same-Mac backup with the local
 import command first. Recovery requires a supported T1 Mac already in USB
 recovery mode and an explicit `RECOVER` confirmation on an attended terminal.
 Apple receives the T1's identity and signing nonces during signing. Factory
-recovery uses device TLS tunnels to public Apple HTTPS endpoints.
+recovery tunnels traffic to public Apple HTTPS endpoints. The pinned restore also
+requests `gg.apple.com` on port 80, so the proxy permits that exact HTTP endpoint.
+Apple [documents both ports for this OS-update service](https://support.apple.com/en-us/101555).
+All destinations must resolve to public addresses.
 
 The native sequence verifies the pinned Apple firmware package, provisions FDR,
 resets only the T1, replays the recovered store in a second restore, resets the
 T1 again, and boots the image and ticket from that second signing transaction.
-It requires successful final restore status, a durable FDR commit, matching
-replayed data and 30 seconds of stable functional USB configuration. Only then
+It requires successful final restore status, durable FDR commits, preserved
+replay input and 30 seconds of stable functional USB configuration. Only then
 does it save all three EFI files in a staged directory, flush and verify them,
 rename the complete directory without replacing existing data, and run the
 sensor-matching local importer.
@@ -40,6 +43,37 @@ restore. It requires inspection before retry; the tool does not automatically
 replay incomplete artifacts or resume an uncertain firmware mutation. Do not
 publish these files, Apple tickets, FDR contents or device identities. Report the
 last printed stage and error, package versions and model instead.
+Stage messages distinguish signing, iBEC handoff and restore-component uploads.
+Transport failures report only numeric curl/HTTP or USB error codes, without
+request or response contents. A boot command may disconnect USB before its
+control transfer completes; explicit Linux device-disconnect errors defer to
+the subsequent USB state and identity checks, never to an assumption of success.
+The observed `rsepfirmware` control-transfer stall (`EPIPE`) likewise proceeds
+to the restore protocol, matching the reference command API's stall tolerance.
+The final `ticket` command can also stall; its narrow exception still requires
+the exact saved image/ticket pair and stable functional boot.
+Other commands and upload failures remain fatal; this exception does not
+establish that SEP loaded or waive the final restore/FDR/boot checks.
+USB mux receive framing follows the peer's header semantics rather than
+requiring the host's transmit marker. Delayed version replies and old TCP
+replies before negotiation do not admit application data or bypass channel
+sequence checks. The restore listener is retried within a bounded startup
+deadline because USB enumeration can precede service readiness. Each USB client
+starts with a fresh source-port range to avoid reusing an interrupted channel.
+`FDRMemoryCommit` can update the store more than once. Replay input is validated
+and saved separately before starting the transaction; restored may refresh records
+in its output, so input/output equality is not a completion condition. Changed
+commits are saved as immutable numbered snapshots before acknowledgement; matching repeats reuse the durable
+snapshot. The latest durable store becomes the output only after successful
+final restore status. Each restore permits at most 16 snapshots totaling 32 MiB.
+`FUDData` supports manifest-selected image lists, named images and bulk replies.
+Only entries marked `IsFUDFirmware` are eligible, and payload replies use the
+personalized images from the current signing ticket. The pinned package has no
+FUD entries, so its list and bulk responses are empty as in the reference protocol.
+Outgoing firmware XML has a separate 32 MiB frame budget: the pinned NOR reply
+is about 21 MiB after base64 encoding its repeated SEP images. Incoming plists
+and the shared binary codec retain their 16 MiB limits. Oversized outgoing
+data is rejected before allocating its base64 representation.
 
 The initial implementation does not repartition device storage, enter DFU, reset
 a functional T1, replace existing EFI generations, or automatically recover
@@ -48,6 +82,20 @@ availability and full device behavior remain unverified. Track native acceptance
 in [#43](https://github.com/standardagents/t1bridge/issues/43): generated-data
 import/calibration load, enrollment, match/non-match, warm/cold boot, Touch Bar,
 camera and ALS. Existing local recovery did not require erasing EFI for a test.
+
+Hardware validation on MacBookPro13,3 with kernel `7.2.8-9-omarchy` completed
+both native restore passes, saved successive FDR commits, verified stable
+functional USB for 30 seconds, installed the EFI generation and completed local
+import. The owner confirmed the physical Touch Bar works. Testing used attended
+local continuation helpers between fixes; those helpers are not shipped. A fresh
+uninterrupted online command, Touch ID enrollment and later warm/cold boots have
+not been validated in this run. This does not extend acceptance to other models.
+
+Signing and downloads use the system CA store. If signing reports curl error 60,
+inspect the certificate chain and update system trust using the official
+[Apple PKI certificates](https://www.apple.com/certificateauthority/) and the
+distribution's CA-management procedure. The local test required Apple's root CA
+to be trusted. Do not bypass TLS verification.
 
 ## Dependencies and privilege boundary
 
@@ -65,7 +113,8 @@ the selected USB device and absence of a functional HID personality, then
 discovers a unique zero-argument `FRST` method below that USB controller's ACPI
 node. The caller cannot supply arbitrary ACPI paths. No listener or permanent
 network service is added. Outbound sockets are limited to the pinned firmware
-download, Apple signing and device-requested public Apple HTTPS destinations.
+download, Apple signing, device-requested public Apple HTTPS destinations and
+the `gg.apple.com:80` endpoint listed above.
 
 Protocol facts were checked against
 [libirecovery](https://github.com/libimobiledevice/libirecovery/tree/95dec3aa25b1e30654ca107eb971971f6a216520),
@@ -151,6 +200,9 @@ Sources: [firmware](https://github.com/niconistal/t1-revive/blob/a8611702ceee494
    of that function returned success with mismatching synthetic stores and
    pre-existing synthetic image/ticket files. Every hardware/restore helper
    was replaced by a stub; this checks the gate, not recovery on a device.
+   Later native hardware validation observed legitimate record updates during
+   replay. Store equality is therefore not itself a validity gate; successful
+   current transactions and preserved input/output provenance are required.
 3. **EFI transaction recovery.** Each file is copied, synced and renamed
    separately. That prevents a partial individual file from taking its final
    name, but interruption between renames can leave a mixed three-file set.

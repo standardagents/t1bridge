@@ -325,7 +325,8 @@ impl Usb {
     }
 
     pub fn control(&self, request: Control, bytes: &mut [u8], timeout: u32) -> Result<usize> {
-        recovery_io::usb_control(self.file.as_fd(), request, bytes, timeout).map_err(Into::into)
+        recovery_io::usb_control(self.file.as_fd(), request, bytes, timeout)
+            .map_err(|error| transfer_error("control", error))
     }
 
     pub fn command(&self, command: &str, blind: bool) -> Result<()> {
@@ -334,7 +335,8 @@ impl Usb {
         }
         let mut bytes = command.as_bytes().to_vec();
         bytes.push(0);
-        let count = self.control(
+        let transfer = recovery_io::usb_control(
+            self.file.as_fd(),
             Control {
                 kind: 0x40,
                 request: u8::from(blind),
@@ -343,11 +345,17 @@ impl Usb {
             },
             &mut bytes,
             10_000,
-        )?;
-        if count != bytes.len() {
-            return Err(Error("short iBoot command transfer"));
-        }
-        Ok(())
+        );
+        let completion = if blind {
+            CommandCompletion::BootHandoff
+        } else if command == "rsepfirmware" {
+            CommandCompletion::RestoreSep
+        } else if command == "ticket" {
+            CommandCompletion::Ticket
+        } else {
+            CommandCompletion::Acknowledged
+        };
+        command_transfer(transfer, bytes.len(), completion)
     }
 
     pub fn upload(&self, bytes: &[u8]) -> Result<()> {
@@ -372,12 +380,14 @@ impl Usb {
 
     pub fn write(&self, bytes: &[u8], mux: bool) -> Result<()> {
         let mut owned = bytes.to_vec();
-        let size = recovery_io::usb_bulk(self.file.as_fd(), self.output, &mut owned, 10_000)?;
+        let size = recovery_io::usb_bulk(self.file.as_fd(), self.output, &mut owned, 10_000)
+            .map_err(|error| transfer_error("bulk upload", error))?;
         if size != bytes.len() {
             return Err(Error("short USB bulk transfer"));
         }
         if mux && size.is_multiple_of(self.packet) {
-            recovery_io::usb_bulk(self.file.as_fd(), self.output, &mut [], 10_000)?;
+            recovery_io::usb_bulk(self.file.as_fd(), self.output, &mut [], 10_000)
+                .map_err(|error| transfer_error("bulk upload terminator", error))?;
         }
         Ok(())
     }
@@ -391,6 +401,64 @@ impl Drop for Usb {
     fn drop(&mut self) {
         recovery_io::usb_release(self.file.as_fd(), self.interface);
     }
+}
+
+// Boot commands can disconnect usbfs before the control transfer completes.
+// This only permits proceeding to the caller's mandatory USB state/identity
+// checks; it is never evidence that the boot or restore succeeded.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandCompletion {
+    Acknowledged,
+    BootHandoff,
+    RestoreSep,
+    Ticket,
+}
+
+fn command_transfer(
+    transfer: io::Result<usize>,
+    expected: usize,
+    completion: CommandCompletion,
+) -> Result<()> {
+    match transfer {
+        Ok(count) if count == expected => Ok(()),
+        Ok(_) => Err(Error("short iBoot command transfer")),
+        Err(error)
+            if completion == CommandCompletion::BootHandoff
+                && matches!(error.raw_os_error(), Some(19 | 108)) =>
+        {
+            // Linux ENODEV / ESHUTDOWN. Do not swallow stalls or timeouts.
+            println!("recovery: boot command disconnected USB; checking the next device state");
+            Ok(())
+        }
+        Err(error)
+            if completion == CommandCompletion::Ticket && error.raw_os_error() == Some(32) =>
+        {
+            // Like RestoreSEP, this command stalls on the observed T1. The
+            // saved image/ticket pair and functional boot proof remain required.
+            println!("recovery: ticket command stalled; checking through the final boot protocol");
+            Ok(())
+        }
+        Err(error)
+            if completion == CommandCompletion::RestoreSep && error.raw_os_error() == Some(32) =>
+        {
+            // The reference iBoot command API tolerates EPIPE. On this T1 the
+            // rsepfirmware status stage stalls. Only this observed command may
+            // proceed; the restore handshake and final status remain required.
+            println!("recovery: RestoreSEP command stalled; checking through the restore protocol");
+            Ok(())
+        }
+        Err(error) => Err(transfer_error("command", error)),
+    }
+}
+
+fn transfer_error(operation: &str, error: io::Error) -> Error {
+    // Only operation labels and numeric OS errors: never bytes, identities,
+    // command arguments, device paths or library-provided error strings.
+    eprintln!(
+        "recovery: USB {operation} failed (errno {:?})",
+        error.raw_os_error()
+    );
+    error.into()
 }
 
 fn field<'a>(text: &'a str, name: &str) -> Result<&'a str> {
@@ -426,6 +494,40 @@ fn parse_identity(serial: &str, nonce: &str) -> Result<Identity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boot_disconnect_only_defers_explicit_disconnects_to_state_checks() {
+        use CommandCompletion::{Acknowledged, BootHandoff, RestoreSep, Ticket};
+        for errno in [19, 108] {
+            assert!(
+                command_transfer(Err(io::Error::from_raw_os_error(errno)), 4, BootHandoff).is_ok()
+            );
+            assert!(
+                command_transfer(Err(io::Error::from_raw_os_error(errno)), 4, Acknowledged)
+                    .is_err()
+            );
+            assert!(
+                command_transfer(Err(io::Error::from_raw_os_error(errno)), 4, RestoreSep).is_err()
+            );
+        }
+        for completion in [Acknowledged, BootHandoff, RestoreSep, Ticket] {
+            for errno in [5, 13, 16, 110] {
+                assert!(
+                    command_transfer(Err(io::Error::from_raw_os_error(errno)), 4, completion)
+                        .is_err()
+                );
+            }
+            assert!(command_transfer(Ok(4), 4, completion).is_ok());
+            assert!(command_transfer(Ok(3), 4, completion).is_err());
+        }
+        assert!(command_transfer(Err(io::Error::from_raw_os_error(32)), 4, RestoreSep).is_ok());
+        assert!(command_transfer(Err(io::Error::from_raw_os_error(32)), 4, Ticket).is_ok());
+        for errno in [19, 108] {
+            assert!(command_transfer(Err(io::Error::from_raw_os_error(errno)), 4, Ticket).is_err());
+        }
+        assert!(command_transfer(Err(io::Error::from_raw_os_error(32)), 4, Acknowledged).is_err());
+        assert!(command_transfer(Err(io::Error::from_raw_os_error(32)), 4, BootHandoff).is_err());
+    }
 
     #[test]
     fn identity_requires_t1_board_and_unambiguous_nonces() {

@@ -21,6 +21,19 @@ pub(super) struct Firmware {
     resources: BTreeMap<String, Vec<u8>>,
 }
 
+pub(super) fn fud_components(identity: &Value) -> Result<Vec<&str>> {
+    let mut names = Vec::new();
+    for (name, entry) in plist::dictionary(plist::get(identity, "Manifest")?)? {
+        let info = plist::dictionary(plist::get(entry, "Info")?)?;
+        match info.get("IsFUDFirmware") {
+            Some(Value::Boolean(true)) => names.push(name.as_str()),
+            Some(Value::Boolean(false)) | None => {}
+            _ => return Err(INVALID),
+        }
+    }
+    Ok(names)
+}
+
 impl Firmware {
     pub fn download() -> Result<Self> {
         Self::from_package(&recovery_io::https(
@@ -86,6 +99,26 @@ impl Firmware {
         }
         firmware.nor_components()?;
         Ok(firmware)
+    }
+
+    pub fn signing_components(&self) -> Result<Vec<&str>> {
+        let mut names = vec![
+            "OSRamdisk",
+            "KernelCache",
+            "DeviceTree",
+            "SEP",
+            "LLB",
+            "iBoot",
+            "RestoreRamDisk",
+            "RestoreKernelCache",
+            "RestoreDeviceTree",
+            "RestoreSEP",
+            "iBEC",
+        ];
+        names.extend(fud_components(&self.identity)?);
+        names.sort_unstable();
+        names.dedup();
+        Ok(names)
     }
 
     pub fn component(&self, name: &str) -> Result<&[u8]> {

@@ -1,6 +1,6 @@
-//! FDR control and bounded device TLS tunnels to Apple's public HTTPS hosts.
+//! FDR control and bounded tunnels to permitted public Apple services.
 //! These outbound sockets exist only while an attended restore owns the USB
-//! interface. The device performs its own TLS; host code never decrypts FDR.
+//! interface. The device owns the tunneled protocol; the host does not terminate TLS.
 
 use super::{
     Error, Result,
@@ -259,8 +259,13 @@ impl Worker {
     }
 }
 
+// The pinned restore requests this OS-update service over HTTP. Apple documents
+// both ports 80 and 443 for it:
+// https://support.apple.com/en-us/101555
+const RESTORE_HTTP_HOST: &str = "gg.apple.com";
+
 fn allowed_host(host: &str, port: u16) -> bool {
-    port == 443
+    (port == 443 || (port == 80 && host == RESTORE_HTTP_HOST))
         && host.len() <= 253
         && host.ends_with(".apple.com")
         && host.split('.').all(|label| {
@@ -298,8 +303,11 @@ fn public_address(address: IpAddr) -> bool {
 fn connect_apple(host: &str, port: u16) -> Result<TcpStream> {
     if !allowed_host(host, port) {
         return Err(Error(
-            "FDR requested a destination outside Apple's HTTPS service",
+            "FDR requested a destination outside permitted Apple services",
         ));
+    }
+    if port == 80 {
+        eprintln!("recovery: connecting Apple restore service: {host}:80");
     }
     let addresses: Vec<_> = (host, port).to_socket_addrs()?.take(8).collect();
     if addresses.is_empty() || addresses.iter().any(|a| !public_address(a.ip())) {
@@ -319,7 +327,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn proxy_allows_only_public_apple_https_destinations() {
+    fn proxy_limits_apple_services_and_rejects_private_addresses() {
         assert!(allowed_host("synthetic.fdr.apple.com", 443));
         for host in [
             "apple.com.attacker.invalid",
@@ -333,7 +341,23 @@ mod tests {
         ] {
             assert!(!allowed_host(host, 443));
         }
-        assert!(!allowed_host("synthetic.apple.com", 80));
+        {
+            let host = RESTORE_HTTP_HOST;
+            assert!(allowed_host(host, 80));
+            assert!(allowed_host(host, 443));
+            assert!(!allowed_host(host, 8080));
+            assert!(!allowed_host(&format!("sub.{host}"), 80));
+            assert!(!allowed_host(&format!("{host}.attacker.invalid"), 80));
+        }
+        for host in [
+            "synthetic.apple.com",
+            "certs.apple.com",
+            "crl.apple.com",
+            "ocsp.apple.com",
+            "gs.apple.com",
+        ] {
+            assert!(!allowed_host(host, 80));
+        }
         for address in [
             "127.0.0.1",
             "10.1.2.3",

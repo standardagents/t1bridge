@@ -17,7 +17,8 @@ const EXISTS: Error =
     Error("preserved EFI data exists; use local recovery or the selected same-Mac backup");
 
 pub(super) fn require_local_absence() -> Result<()> {
-    let roots = preserved_efi_discovery::discover_roots().map_err(|_| {
+    let roots = preserved_efi_discovery::discover_roots().map_err(|error| {
+        eprintln!("recovery: {error}");
         Error("EFI inspection failed; absence of local data has not been established")
     })?;
     for root in roots {

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 
 struct bounded_body {
     unsigned char *bytes;
@@ -69,9 +70,19 @@ int t1_recovery_https(const char *url, const unsigned char *request,
         OPTION(CURLOPT_POSTFIELDS, request);
         OPTION(CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)request_size);
     }
-    if (curl_easy_perform(curl) != CURLE_OK ||
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK ||
-        status != 200) goto done;
+    CURLcode code = curl_easy_perform(curl);
+    if (code != CURLE_OK) {
+        /* Numeric transport diagnostics only: never log bodies, tickets,
+         * request headers, TLS peer strings or device identities. */
+        fprintf(stderr, "recovery: HTTPS transport failed (curl code %d)\n", (int)code);
+        goto done;
+    }
+    if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK)
+        goto done;
+    if (status != 200) {
+        fprintf(stderr, "recovery: HTTPS server returned status %ld\n", status);
+        goto done;
+    }
     *output_size = body.used;
     result = 0;
 done:

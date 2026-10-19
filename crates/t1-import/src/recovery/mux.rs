@@ -51,6 +51,19 @@ pub(super) struct Mux<T> {
     next_port: u16,
 }
 
+impl Mux<Usb> {
+    pub fn open(transport: Usb) -> Result<Self> {
+        use std::io::Read;
+        let mut random = [0; 2];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+        let mut mux = Self::new(transport)?;
+        // Reopened clients must not reuse the interrupted client's TCP tuple.
+        // Leave enough source ports for all bounded channels in this attempt.
+        mux.next_port = 1024 + u16::from_ne_bytes(random) % 50_000;
+        Ok(mux)
+    }
+}
+
 impl<T: Transport> Mux<T> {
     pub fn new(transport: T) -> Result<Self> {
         let mut mux = Self {
@@ -188,7 +201,9 @@ impl<T: Transport> Mux<T> {
             return Ok(None);
         }
         let bytes = self.take(port, length + 4)?.ok_or(INVALID)?;
-        Ok(Some(plist::decode(&bytes[4..])?))
+        Ok(Some(plist::decode(&bytes[4..]).inspect_err(|_| {
+            eprintln!("recovery: framed USB mux property-list decode failed");
+        })?))
     }
 
     pub fn available(&self, port: u16) -> Result<usize> {
@@ -248,27 +263,37 @@ impl<T: Transport> Mux<T> {
             return Err(INVALID);
         }
         while self.bytes.len() >= 8 {
+            let protocol = be32(&self.bytes[..4]);
             let length = be32(&self.bytes[4..8]) as usize;
-            let header = if self.version >= 2 { 16 } else { 8 };
+            let header = if self.version >= 2 && protocol != 0 {
+                16
+            } else {
+                8
+            };
             if length < header || length > MAX_PACKET {
+                eprintln!("recovery: invalid USB mux frame length for the negotiated header");
                 return Err(INVALID);
             }
             if self.bytes.len() < length {
                 break;
             }
             let packet: Vec<_> = self.bytes.drain(..length).collect();
-            if self.version >= 2 {
-                if be32(&packet[8..12]) != 0xfeed_face {
-                    return Err(INVALID);
-                }
-                self.receive_sequence = be16(&packet[12..14]);
+            if self.version >= 2 && protocol != 0 {
+                // Like usbmuxd, treat the received marker as peer-owned;
+                // FEEDFACE is a host transmit value, not an admission check.
+                self.receive_sequence = be16(&packet[14..16]);
             }
             match be32(&packet[..4]) {
-                0 if self.version == 0 && length == 20 => {
-                    self.version = be32(&packet[8..12]);
-                    if !matches!(self.version, 1 | 2) {
+                0 if length == 20 => {
+                    let version = be32(&packet[8..12]);
+                    if !matches!(version, 1 | 2) || (self.version != 0 && version != self.version) {
+                        eprintln!("recovery: unsupported USB mux version");
                         return Err(INVALID);
                     }
+                    if self.version != 0 {
+                        continue;
+                    }
+                    self.version = version;
                     if self.version == 2 {
                         self.packet(2, &[7])?;
                     }
@@ -279,7 +304,19 @@ impl<T: Transport> Mux<T> {
                     }
                 }
                 6 if self.version != 0 => self.input_tcp(&packet[header..])?,
-                _ => return Err(INVALID),
+                // A reopened restore transport can still have TCP replies
+                // queued for a previous owner. No channel exists yet; discard
+                // those frames while awaiting our own version negotiation.
+                6 if length >= 28 && self.channels.is_empty() => {}
+                _ => {
+                    eprintln!(
+                        "recovery: unexpected USB mux frame (protocol {}, size {}, negotiated version {})",
+                        be32(&packet[..4]),
+                        length,
+                        self.version
+                    );
+                    return Err(INVALID);
+                }
             }
         }
         if self
@@ -318,10 +355,12 @@ impl<T: Transport> Mux<T> {
 
     fn input_tcp(&mut self, packet: &[u8]) -> Result<()> {
         if packet.len() < 20 {
+            eprintln!("recovery: short USB mux TCP header");
             return Err(INVALID);
         }
         let header = usize::from(packet[12] >> 4) * 4;
         if header < 20 || header > packet.len() {
+            eprintln!("recovery: invalid USB mux TCP header size");
             return Err(INVALID);
         }
         let source = be16(&packet[..2]);
@@ -333,6 +372,7 @@ impl<T: Transport> Mux<T> {
             return Ok(());
         };
         if source != channel.destination {
+            eprintln!("recovery: USB mux TCP service mismatch");
             return Err(INVALID);
         }
         if flags & 4 != 0 {
@@ -345,6 +385,7 @@ impl<T: Transport> Mux<T> {
         channel.window = u32::from(be16(&packet[14..16])) << 8;
         if !channel.connected {
             if flags != 0x12 || ack != 1 || packet.len() != header {
+                eprintln!("recovery: invalid USB mux TCP connection acknowledgement");
                 return Err(INVALID);
             }
             channel.receive_next = sequence.wrapping_add(1);
@@ -356,6 +397,7 @@ impl<T: Transport> Mux<T> {
             || sequence != channel.receive_next
             || ack.wrapping_sub(channel.send_ack) > channel.send_next.wrapping_sub(channel.send_ack)
         {
+            eprintln!("recovery: invalid USB mux TCP sequence or acknowledgement");
             return Err(INVALID);
         }
         channel.send_ack = ack;
@@ -426,14 +468,19 @@ mod tests {
 
     struct Wire {
         output: RefCell<Vec<Vec<u8>>>,
+        input: RefCell<VecDeque<Vec<u8>>>,
     }
     impl Transport for Wire {
         fn send(&self, bytes: &[u8]) -> Result<()> {
             self.output.borrow_mut().push(bytes.to_vec());
             Ok(())
         }
-        fn receive(&self, _: &mut [u8]) -> io::Result<usize> {
-            Err(io::ErrorKind::TimedOut.into())
+        fn receive(&self, bytes: &mut [u8]) -> io::Result<usize> {
+            let Some(packet) = self.input.borrow_mut().pop_front() else {
+                return Err(io::ErrorKind::TimedOut.into());
+            };
+            bytes[..packet.len()].copy_from_slice(&packet);
+            Ok(packet.len())
         }
     }
 
@@ -452,6 +499,7 @@ mod tests {
     fn fragmented_channel_frames_and_sequence_errors() {
         let mut mux = Mux::new(Wire {
             output: RefCell::new(vec![]),
+            input: RefCell::new(VecDeque::new()),
         })
         .unwrap();
         mux.version = 2;
@@ -477,6 +525,7 @@ mod tests {
     fn refuses_oversize_frame_before_allocation() {
         let mut mux = Mux::new(Wire {
             output: RefCell::new(vec![]),
+            input: RefCell::new(VecDeque::new()),
         })
         .unwrap();
         mux.version = 1;
@@ -485,5 +534,46 @@ mod tests {
         mux.input_tcp(&packet(port, 1, 1, 0x10, &u32::MAX.to_be_bytes()))
             .unwrap();
         assert!(mux.receive_plist(port, false).is_err());
+    }
+
+    #[test]
+    fn v2_receive_uses_peer_marker_and_correct_receive_sequence() {
+        let mut version = 0_u32.to_be_bytes().to_vec();
+        version.extend(20_u32.to_be_bytes());
+        version.extend([0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let mut reply = 6_u32.to_be_bytes().to_vec();
+        reply.extend(36_u32.to_be_bytes());
+        reply.extend(0x1234_5678_u32.to_be_bytes()); // Synthetic peer-owned marker.
+        // Deliberately distinct, synthetic sequence fields detect swapping.
+        reply.extend(7_u16.to_be_bytes());
+        reply.extend(3_u16.to_be_bytes());
+        reply.extend(packet(1, 0, 1, 0x12, &[]));
+        let mut mux = Mux::new(Wire {
+            output: RefCell::new(vec![]),
+            input: RefCell::new(VecDeque::from([
+                reply.clone(),
+                version.clone(),
+                version,
+                reply.clone(),
+            ])),
+        })
+        .unwrap();
+        mux.poll().unwrap();
+        assert!(!mux.ready()); // Previous owner's queued TCP reply was ignored.
+        mux.poll().unwrap();
+        let port = mux.connect(62078).unwrap();
+        mux.poll().unwrap();
+        assert!(!mux.connected(port).unwrap());
+        mux.poll().unwrap();
+        assert!(mux.connected(port).unwrap());
+        let output = mux.transport.output.borrow();
+        let acknowledgement = output.last().unwrap();
+        assert_eq!(&acknowledgement[8..12], &0xfeed_face_u32.to_be_bytes());
+        assert_eq!(&acknowledgement[14..16], &3_u16.to_be_bytes());
+        drop(output);
+        // Opaque markers do not relax framing bounds.
+        reply[4..8].copy_from_slice(&7_u32.to_be_bytes());
+        mux.transport.input.borrow_mut().push_back(reply);
+        assert!(mux.poll().is_err());
     }
 }

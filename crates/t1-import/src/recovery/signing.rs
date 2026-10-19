@@ -47,19 +47,7 @@ impl SignedFirmware {
             return Err(INVALID);
         }
         let mut components = std::collections::BTreeMap::new();
-        for name in [
-            "OSRamdisk",
-            "KernelCache",
-            "DeviceTree",
-            "SEP",
-            "LLB",
-            "iBoot",
-            "RestoreRamDisk",
-            "RestoreKernelCache",
-            "RestoreDeviceTree",
-            "RestoreSEP",
-            "iBEC",
-        ] {
+        for name in firmware.signing_components()? {
             if plist::dictionary(&response)?.contains_key(&format!("{name}-TBM")) {
                 return Err(INVALID);
             }
@@ -266,21 +254,43 @@ mod tests {
         let path = std::env::var_os("T1BRIDGE_RECOVERY_PACKAGE").expect("package path required");
         let firmware = Firmware::from_package(&std::fs::read(path).unwrap()).unwrap();
         let ticket = wrap(0x30, &wrap(0x16, b"synthetic ticket"));
-        for name in [
-            "OSRamdisk",
-            "KernelCache",
-            "DeviceTree",
-            "SEP",
-            "LLB",
-            "iBoot",
-            "iBEC",
-            "RestoreRamDisk",
-            "RestoreKernelCache",
-            "RestoreDeviceTree",
-            "RestoreSEP",
-        ] {
-            personalize(name, firmware.component(name).unwrap(), &ticket).unwrap();
+        let mut components = std::collections::BTreeMap::new();
+        for name in firmware.signing_components().unwrap() {
+            let component = personalize(name, firmware.component(name).unwrap(), &ticket).unwrap();
+            println!("synthetic personalized {name}: {} bytes", component.len());
+            components.insert(name.into(), component);
         }
+        println!(
+            "pinned FUD component count: {}",
+            super::super::firmware::fud_components(&firmware.identity)
+                .unwrap()
+                .len()
+        );
+        let signed = SignedFirmware {
+            ticket,
+            combined: vec![],
+            components,
+        };
+        for request in [
+            plist::dict([]),
+            plist::dict([(
+                "Arguments",
+                plist::dict([("FUDImageList", Value::Boolean(true))]),
+            )]),
+        ] {
+            let reply =
+                super::super::restore_images::fud_data(&request, &firmware.identity, |name| {
+                    signed.component(name).map(<[u8]>::to_vec)
+                })
+                .unwrap();
+            assert_eq!(
+                plist::decode(&plist::encode_xml(&reply).unwrap()).unwrap(),
+                reply
+            );
+        }
+        let nor = super::super::restore::nor_data(&plist::dict([]), &firmware, &signed).unwrap();
+        let xml = plist::encode_xml(&nor).expect("pinned NOR reply must fit the restore frame");
+        println!("synthetic NOR XML: {} bytes", xml.len());
         let identity = Identity {
             ecid: 0x1234,
             ap_nonce: vec![0xaa; 20],

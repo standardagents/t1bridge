@@ -10,6 +10,10 @@ pub(super) use t1_bridge::bplist::Value;
 use t1_bridge::bplist::{self, MAX_PLIST_SIZE};
 
 const INVALID: Error = Error("invalid recovery property list");
+// NOR replies repeat personalized SEP images and exceed 16 MiB after base64.
+// Reserve the four-byte frame prefix within the mux channel's 32 MiB bound.
+const MAX_XML_OUTPUT_SIZE: usize = 32 * 1024 * 1024 - 4;
+const OUTPUT_LIMIT: Error = Error("encoded recovery XML property list exceeds its output limit");
 
 pub(super) fn dict<const N: usize>(items: [(&str, Value); N]) -> Value {
     Value::Dictionary(items.into_iter().map(|(k, v)| (k.into(), v)).collect())
@@ -20,38 +24,49 @@ pub(super) fn string(value: &str) -> Value {
 }
 
 pub(super) fn get<'a>(value: &'a Value, key: &str) -> Result<&'a Value> {
-    dictionary(value)?.get(key).ok_or(INVALID)
+    dictionary(value)?.get(key).ok_or_else(|| {
+        let category = match key {
+            "MsgType" | "DataType" | "Arguments" | "Status" | "Command" | "ConnPort"
+            | "FDRData" => key,
+            _ => "other required protocol field",
+        };
+        eprintln!("recovery: property list is missing {category}");
+        Error("required recovery property-list field is missing")
+    })
 }
 
 pub(super) fn dictionary(value: &Value) -> Result<&BTreeMap<String, Value>> {
     match value {
         Value::Dictionary(v) => Ok(v),
-        _ => Err(INVALID),
+        _ => Err(Error("recovery property-list value is not a dictionary")),
     }
 }
 
 pub(super) fn text(value: &Value) -> Result<&str> {
     match value {
         Value::String(v) => Ok(v),
-        _ => Err(INVALID),
+        _ => Err(Error("recovery property-list value is not a string")),
     }
 }
 
 pub(super) fn integer(value: &Value) -> Result<u64> {
     match value {
-        Value::Integer(v) => u64::try_from(*v).map_err(|_| INVALID),
+        Value::Integer(v) => u64::try_from(*v)
+            .map_err(|_| Error("recovery property-list integer is negative or out of range")),
         Value::String(v) => v.strip_prefix("0x").map_or_else(
             || v.parse().map_err(|_| INVALID),
             |hex| u64::from_str_radix(hex, 16).map_err(|_| INVALID),
         ),
-        _ => Err(INVALID),
+        _ => Err(Error(
+            "recovery property-list value is not an unsigned integer",
+        )),
     }
 }
 
 pub(super) fn data(value: &Value) -> Result<&[u8]> {
     match value {
         Value::Data(v) if !v.is_empty() => Ok(v),
-        _ => Err(INVALID),
+        _ => Err(Error("recovery property-list value is not nonempty data")),
     }
 }
 
@@ -107,7 +122,13 @@ impl Element {
             b"plist" if self.children.len() == 1 && !self.children[0].0 => {
                 self.children.into_iter().next().ok_or(INVALID)?.1
             }
-            _ => return Err(INVALID),
+            b"real" => {
+                return Err(Error(
+                    "recovery property list contains an unsupported real number",
+                ));
+            }
+            b"date" => return Err(Error("recovery property list contains an unsupported date")),
+            _ => return Err(Error("unsupported recovery XML property-list element")),
         };
         Ok((self.name == b"key", value))
     }
@@ -118,7 +139,10 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Value> {
         return Err(INVALID);
     }
     if bytes.starts_with(b"bplist00") {
-        return bplist::decode(bytes).map_err(|_| INVALID);
+        return bplist::decode(bytes).map_err(|error| {
+            eprintln!("recovery: binary property-list decoder: {error}");
+            INVALID
+        });
     }
     let source = std::str::from_utf8(bytes).map_err(|_| INVALID)?;
     let mut reader = Reader::from_str(source);
@@ -179,7 +203,9 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Value> {
             Event::DocType(t)
                 if stack.is_empty() && output.is_none() && !t.as_ref().contains('[') => {}
             Event::Decl(_) | Event::Comment(_) => {}
-            Event::Eof if stack.is_empty() => return output.ok_or(INVALID),
+            Event::Eof if stack.is_empty() => {
+                return output.ok_or(Error("recovery XML property list is empty"));
+            }
             _ => return Err(INVALID),
         }
     }
@@ -191,22 +217,27 @@ pub(super) fn encode_xml(value: &Value) -> Result<Vec<u8>> {
     );
     write_value(value, &mut output, 0)?;
     output.push_str("</plist>");
-    if output.len() > MAX_PLIST_SIZE {
-        return Err(INVALID);
+    if output.len() > MAX_XML_OUTPUT_SIZE {
+        return Err(OUTPUT_LIMIT);
     }
     Ok(output.into_bytes())
 }
 
 fn write_value(value: &Value, output: &mut String, depth: usize) -> Result<()> {
-    if depth >= 64 || output.len() > MAX_PLIST_SIZE {
+    if depth >= 64 {
         return Err(INVALID);
     }
+    require_xml_space(output, 0)?;
     match value {
         Value::Boolean(true) => output.push_str("<true/>"),
         Value::Boolean(false) => output.push_str("<false/>"),
-        Value::String(value) => tagged(output, "string", &quick_xml::escape::escape(value)),
-        Value::Integer(value) => tagged(output, "integer", &value.to_string()),
-        Value::Data(value) => tagged(output, "data", &STANDARD.encode(value)),
+        Value::String(value) => tagged(output, "string", &quick_xml::escape::escape(value))?,
+        Value::Integer(value) => tagged(output, "integer", &value.to_string())?,
+        Value::Data(value) => {
+            let encoded = base64::encoded_len(value.len(), true).ok_or(OUTPUT_LIMIT)?;
+            require_xml_space(output, encoded.checked_add(13).ok_or(OUTPUT_LIMIT)?)?;
+            tagged(output, "data", &STANDARD.encode(value))?;
+        }
         Value::Array(values) => {
             output.push_str("<array>");
             for value in values {
@@ -217,7 +248,7 @@ fn write_value(value: &Value, output: &mut String, depth: usize) -> Result<()> {
         Value::Dictionary(values) => {
             output.push_str("<dict>");
             for (key, value) in values {
-                tagged(output, "key", &quick_xml::escape::escape(key));
+                tagged(output, "key", &quick_xml::escape::escape(key))?;
                 write_value(value, output, depth + 1)?;
             }
             output.push_str("</dict>");
@@ -227,7 +258,23 @@ fn write_value(value: &Value, output: &mut String, depth: usize) -> Result<()> {
     Ok(())
 }
 
-fn tagged(output: &mut String, tag: &str, value: &str) {
+fn require_xml_space(output: &str, additional: usize) -> Result<()> {
+    if output
+        .len()
+        .checked_add(additional)
+        .is_none_or(|size| size > MAX_XML_OUTPUT_SIZE)
+    {
+        return Err(OUTPUT_LIMIT);
+    }
+    Ok(())
+}
+
+fn tagged(output: &mut String, tag: &str, value: &str) -> Result<()> {
+    let additional = value
+        .len()
+        .checked_add(tag.len() * 2 + 5)
+        .ok_or(OUTPUT_LIMIT)?;
+    require_xml_space(output, additional)?;
     output.push('<');
     output.push_str(tag);
     output.push('>');
@@ -235,11 +282,28 @@ fn tagged(output: &mut String, tag: &str, value: &str) {
     output.push_str("</");
     output.push_str(tag);
     output.push('>');
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_xml_output_has_a_separate_bounded_budget() {
+        let nor = Value::Array(
+            (0..3)
+                .map(|_| Value::Data(vec![0; 5 * 1024 * 1024]))
+                .collect(),
+        );
+        let xml = encode_xml(&nor).unwrap();
+        assert!(xml.len() > MAX_PLIST_SIZE);
+        assert!(xml.len() <= MAX_XML_OUTPUT_SIZE);
+        // Larger output does not increase the decoder's untrusted input bound.
+        assert!(decode(&xml).is_err());
+        let oversized = Value::Data(vec![0; 25 * 1024 * 1024]);
+        assert_eq!(encode_xml(&oversized).unwrap_err().0, OUTPUT_LIMIT.0);
+    }
 
     #[test]
     fn roundtrip_restore_values_in_both_encodings() {

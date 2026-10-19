@@ -9,6 +9,7 @@ mod firmware;
 mod mux;
 mod plist;
 mod restore;
+mod restore_images;
 mod signing;
 mod storage;
 mod usb;
@@ -92,7 +93,11 @@ pub fn run(efi: &Path) -> Result<()> {
         Some(&first.fdr),
         |name, bytes| storage::save(&personalize, name, bytes),
     )?;
-    storage::save(&personalize, "complete", b"restore-success-and-fdr-match\n")?;
+    storage::save(
+        &personalize,
+        "complete",
+        b"restore-success-and-durable-fdr\n",
+    )?;
     storage::save(&personalize, "version.plist", &firmware.version)?;
     let device = reset_device()?;
     println!("recovery: booting and checking the recovered firmware");
@@ -102,7 +107,7 @@ pub fn run(efi: &Path) -> Result<()> {
         "boot-verified",
         b"functional-usb-stable-30s\n",
     )?;
-    destination.install(&first.fdr, &second.signed.combined, &firmware.version)?;
+    destination.install(&second.fdr, &second.signed.combined, &firmware.version)?;
     attempt.finish()?;
     println!("recovery: EFI generation saved; importing sensor-matched local data");
     crate::runtime::attempt_protected_import()
