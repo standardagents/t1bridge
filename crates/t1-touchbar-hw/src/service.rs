@@ -491,6 +491,18 @@ fn process_input(
             }
             FnRead::Idle => {}
         }
+    } else {
+        // A key remapper such as keyd holds the keyboard with EVIOCGRAB, so no
+        // Fn events reach this descriptor, but the kernel's key state still
+        // tracks Fn. set_fn_pressed ignores an unchanged state. This only runs
+        // because wait_events returns at least every INPUT_WAIT_MS: if the loop
+        // ever sleeps until an event arrives, Fn stops working under a grab.
+        let pressed = function.pressed().map_err(|_| ServiceError::Input)?;
+        if let Some(frame) = input_state.set_fn_pressed(origin.elapsed(), pressed)
+            && let Some(active) = connection.as_mut()
+        {
+            active.queue_input(&frame, dimensions);
+        }
     }
     Ok(())
 }
