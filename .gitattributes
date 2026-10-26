@@ -1,5 +1,6 @@
 packaging/arch/t1bridge/PKGBUILD export-ignore
 packaging/arch/t1bridge-dkms/PKGBUILD export-ignore
+packaging/arch/t1bridge-ncm-dkms/PKGBUILD export-ignore
 kernel/uvcvideo-t1/upstream/*.patch whitespace=-blank-at-eol,-space-before-tab
 kernel/appletbdrm-t1/upstream/*.patch whitespace=-blank-at-eol,-space-before-tab
 packaging/arch/libfprint-t1bridge/*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

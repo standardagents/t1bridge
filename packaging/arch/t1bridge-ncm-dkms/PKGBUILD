@@ -1,0 +1,28 @@
+pkgname=t1bridge-ncm-dkms
+pkgver=0.1.12
+pkgrel=1
+pkgdesc='DKMS package for the Apple T1 private NCM link'
+arch=('x86_64')
+url='https://github.com/standardagents/t1bridge'
+license=('MIT' 'GPL-2.0-or-later')
+depends=('dkms')
+optdepends=('linux-headers: build modules for the Arch kernel')
+conflicts=('t1bridge-dkms')
+options=('!debug')
+source=("t1bridge-${pkgver}.tar.gz")
+sha256sums=('de9d2b857e4bb52d4ce5d0adc02c06ef32c9047fc99363a389c5fe30af6ccfcb')
+
+package() {
+	local source_root="${srcdir}/t1bridge-${pkgver}"
+	local dkms_root="${pkgdir}/usr/src/${pkgname}-${pkgver}"
+
+	install -d "${dkms_root}"
+	install -m644 "${source_root}/kernel/apple-t1-ncm/"{Makefile,apple_t1_ncm.c} \
+		"${dkms_root}/"
+	install -Dm644 "${source_root}/kernel/dkms/ncm-dkms.conf" \
+		"${dkms_root}/dkms.conf"
+	install -Dm644 "${source_root}/LICENSE" \
+		"${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+	install -Dm644 "${source_root}/kernel/LICENSE.md" \
+		"${pkgdir}/usr/share/licenses/${pkgname}/KERNEL-LICENSES.md"
+}

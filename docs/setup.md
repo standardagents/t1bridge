@@ -29,12 +29,13 @@ Keep a working password login and back up the disk before changing boot
 configuration. Preserve the Apple EFI partition: it contains machine-specific
 data needed by Touch ID. Do not format it as part of installing Linux.
 
-Install these packages together from the official repository:
+Install the userspace packages and choose one of the two conflicting DKMS packages from the official repository:
 
 | Package | Purpose |
 | --- | --- |
 | `t1bridge` | Hardware services, importer, fingerprint broker, default Touch Bar |
 | `t1bridge-dkms` | T1 configuration, display, network, and camera modules |
+| `t1bridge-ncm-dkms` | Private T1 network module only, for use with another Touch Bar stack |
 | `libfprint-t1bridge` | Standard fingerprint driver integration |
 | `fprintd-t1bridge` | Matching fprintd integration and command-line tools |
 
@@ -43,6 +44,11 @@ stay a matched pair. They are optional for Touch Bar-only use. Use the
 [published signing key](../README.md#1-trust-the-signing-key); do not disable
 signature checks. Install headers matching the kernel you will
 boot, and confirm DKMS and the normal initramfs generation complete successfully.
+
+If another project provides the Touch Bar driver, use `t1bridge-ncm-dkms`
+instead of `t1bridge-dkms`. The two DKMS packages conflict because they both
+provide the private NCM module. The NCM-only package has `AUTOINSTALL` enabled,
+so DKMS rebuilds it for newly installed kernels.
 
 From your normal user account, after package installation:
 

@@ -192,6 +192,7 @@ before rebooting; do not bypass signature or dependency errors.
 | --- | --- |
 | `t1bridge` | Services, importer, Touch ID broker and default Touch Bar |
 | `t1bridge-dkms` | T1 configuration, display, network and camera kernel modules |
+| `t1bridge-ncm-dkms` | Private T1 network module only, for use with another Touch Bar stack |
 | `libfprint-t1bridge` | T1Bridge driver for the standard fingerprint API |
 | `fprintd-t1bridge` | Matched fingerprint daemon, tools and PAM module |
 

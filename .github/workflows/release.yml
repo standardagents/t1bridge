@@ -57,7 +57,7 @@ jobs:
           set -euo pipefail
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           version=$(bash -c 'source "$1"; printf "%s" "$pkgver"' _ packaging/arch/t1bridge/PKGBUILD)
-          for recipe in packaging/arch/t1bridge{,-dkms}/PKGBUILD; do
+          for recipe in packaging/arch/t1bridge{,-dkms,-ncm-dkms}/PKGBUILD; do
             test "$(bash -c 'source "$1"; printf "%s" "$pkgver"' _ "$recipe")" = "$version"
           done
           tag_oid=
@@ -86,12 +86,13 @@ jobs:
             --prefix="t1bridge-$version/" HEAD^{tree} |
             gzip -n >"release/t1bridge-$version.tar.gz"
           archive_sha=$(sha256sum "release/t1bridge-$version.tar.gz" | cut -d' ' -f1)
-          for recipe in packaging/arch/t1bridge{,-dkms}/PKGBUILD; do
+          for recipe in packaging/arch/t1bridge{,-dkms,-ncm-dkms}/PKGBUILD; do
             test "$(bash -c 'source "$1"; printf "%s" "${sha256sums[0]}"' _ "$recipe")" = "$archive_sha"
           done
           printf 'epoch=%s\nversion=%s\n' "$epoch" "$version" >>"$GITHUB_OUTPUT"
           cp packaging/arch/t1bridge/PKGBUILD release/t1bridge.PKGBUILD
           cp packaging/arch/t1bridge-dkms/PKGBUILD release/t1bridge-dkms.PKGBUILD
+          cp packaging/arch/t1bridge-ncm-dkms/PKGBUILD release/t1bridge-ncm-dkms.PKGBUILD
           cp packaging/arch/libfprint-t1bridge/PKGBUILD \
             release/libfprint-t1bridge.PKGBUILD
           cp packaging/arch/libfprint-t1bridge/*.patch release/
@@ -110,9 +111,9 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
           output="$GITHUB_WORKSPACE/build-packages"
           install -d -o builder -g builder "$output"
-          for package in t1bridge-dkms t1bridge libfprint-t1bridge fprintd-t1bridge; do
+          for package in t1bridge-dkms t1bridge-ncm-dkms t1bridge libfprint-t1bridge fprintd-t1bridge; do
             directory="$GITHUB_WORKSPACE/packaging/arch/$package"
-            if test "$package" = t1bridge || test "$package" = t1bridge-dkms; then
+            if test "$package" = t1bridge || test "$package" = t1bridge-dkms || test "$package" = t1bridge-ncm-dkms; then
               cp "$GITHUB_WORKSPACE/release/t1bridge-${{ steps.source.outputs.version }}.tar.gz" \
                 "$directory/"
             fi
@@ -135,7 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t packages < <(find build-packages -maxdepth 1 -type f -name '*.pkg.tar.zst' -print | sort)
-          test "${#packages[@]}" -eq 4
+          test "${#packages[@]}" -eq 5
           cp "${packages[@]}" release/
           (cd release && sha256sum *.PKGBUILD *.patch *.pkg.tar.zst *.tar.gz | LC_ALL=C sort -k2 >SHA256SUMS.unsigned)
 
@@ -151,8 +152,13 @@ jobs:
           printf '%s\n' \
             'HOOKS=(base systemd microcode modconf kms keyboard sd-vconsole block filesystems fsck)' \
             >/etc/mkinitcpio.conf.d/00-lifecycle-generic.conf
-          mapfile -t packages < <(find build-packages -maxdepth 1 -type f -name '*.pkg.tar.zst' -print | sort)
+          # The full and NCM-only DKMS packages conflict: test them separately.
+          mapfile -t packages < <(find build-packages -maxdepth 1 -type f \
+            -name '*.pkg.tar.zst' ! -name 't1bridge-ncm-dkms-*.pkg.tar.zst' -print | sort)
           test "${#packages[@]}" -eq 4
+          mapfile -t ncm_packages < <(find build-packages -maxdepth 1 -type f \
+            -name 't1bridge-ncm-dkms-*.pkg.tar.zst' -print)
+          test "${#ncm_packages[@]}" -eq 1
           pacman \
             --noconfirm --ask=4 -S --needed libfprint fprintd dkms linux linux-headers
           pacman \
@@ -176,6 +182,13 @@ jobs:
             done
           }
           assert_dkms_modules
+          # Without conflict replacement consent, the full stack must remain intact.
+          if pacman --noconfirm -U "${ncm_packages[0]}"; then
+            echo 'NCM-only package unexpectedly co-installed with t1bridge-dkms' >&2
+            exit 1
+          fi
+          pacman -Q t1bridge-dkms
+          test -z "$(pacman -Qq t1bridge-ncm-dkms 2>/dev/null || true)"
           test -x "/usr/lib/fprintd"
           test -f "/usr/lib/security/pam_fprintd.so"
           test -f "/usr/lib/systemd/system/fprintd.service"
@@ -222,6 +235,54 @@ jobs:
           test ! -e "/usr/share/dbus-1/system.d/net.reactivated.Fprint.conf"
           test -f "/var/lib/t1bridge/machine-data/calibration.fscl"
           test -x "/home/synthetic/.config/t1bridge/renderer"
+
+      - name: Verify isolated NCM-only package lifecycle
+        run: |
+          set -euo pipefail
+          test "${GITHUB_ACTIONS:-}" = true
+          test -f /.dockerenv
+          test "$(id -u)" -eq 0
+          export SYSTEMD_OFFLINE=1
+          mapfile -t packages < <(find build-packages -maxdepth 1 -type f \
+            -name 't1bridge-ncm-dkms-*.pkg.tar.zst' -print)
+          test "${#packages[@]}" -eq 1
+          test -z "$(pacman -Qq t1bridge-dkms 2>/dev/null || true)"
+          pacman --noconfirm -U "${packages[0]}"
+          pacman -Q t1bridge-ncm-dkms
+          assert_ncm_only() {
+            local module
+            local -a matches
+            mapfile -t matches < <(find /usr/lib/modules -type f \
+              -path '*/updates/dkms/apple_t1_ncm.ko*')
+            test "${#matches[@]}" -eq 1
+            for module in t1_cfgsel appletbdrm uvcvideo; do
+              test -z "$(find /usr/lib/modules -type f \
+                -path "*/updates/dkms/$module.ko*" -print -quit)"
+            done
+            test ! -e /usr/lib/modprobe.d/t1bridge.conf
+            test ! -e /usr/lib/modules-load.d/t1bridge.conf
+            test ! -e /etc/mkinitcpio.conf.d/t1bridge.conf
+          }
+          assert_ncm_only
+          pacman --noconfirm -U "${packages[0]}"
+          assert_ncm_only
+          # Test the opposite conflict direction without replacing NCM-only.
+          mapfile -t full_packages < <(find build-packages -maxdepth 1 -type f \
+            -name 't1bridge-dkms-*.pkg.tar.zst' -print)
+          test "${#full_packages[@]}" -eq 1
+          if pacman --noconfirm -U "${full_packages[0]}"; then
+            echo 'Full DKMS package unexpectedly co-installed with NCM-only' >&2
+            exit 1
+          fi
+          pacman -Q t1bridge-ncm-dkms
+          test -z "$(pacman -Qq t1bridge-dkms 2>/dev/null || true)"
+          assert_ncm_only
+          pacman --noconfirm -R t1bridge-ncm-dkms
+          test ! -e "/usr/src/t1bridge-ncm-dkms-${{ steps.source.outputs.version }}"
+          test -z "$(find /usr/lib/modules -type f \
+            -path '*/updates/dkms/apple_t1_ncm.ko*' -print -quit)"
+          test -f /var/lib/t1bridge/machine-data/calibration.fscl
+          test -x /home/synthetic/.config/t1bridge/renderer
 
       - name: Save unsigned candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -273,6 +334,7 @@ jobs:
           test -f "t1bridge-${TAG#v}.tar.gz"
           test -f t1bridge.PKGBUILD
           test -f t1bridge-dkms.PKGBUILD
+          test -f t1bridge-ncm-dkms.PKGBUILD
           test -f libfprint-t1bridge.PKGBUILD
           test -f fprintd-t1bridge.PKGBUILD
           test -f 0001-Add-T1Bridge-fingerprint-driver.patch
@@ -280,10 +342,10 @@ jobs:
           test -f 0001-Honor-driver-native-duplicate-detection.patch
           test -f 0002-Fix-tests-for-current-GLib.patch
           test -z "$(find . -mindepth 1 ! -type f -print -quit)"
-          test "$(find . -mindepth 1 -type f -printf x | wc -c)" -eq 14
+          test "$(find . -mindepth 1 -type f -printf x | wc -c)" -eq 16
           mapfile -t packages < <(find . -maxdepth 1 -type f \
             -name '*.pkg.tar.zst' -printf '%f\n' | sort)
-          test "${#packages[@]}" -eq 4
+          test "${#packages[@]}" -eq 5
           actual_manifest=$(sha256sum *.PKGBUILD *.patch *.pkg.tar.zst *.tar.gz | LC_ALL=C sort -k2)
           diff -u SHA256SUMS.unsigned <(printf '%s\n' "$actual_manifest")
 
