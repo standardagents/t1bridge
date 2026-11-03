@@ -5,6 +5,7 @@
  * Copyright (c) 2023 Kerem Karabay <kekrby@gmail.com>
  */
 
+#include <linux/acpi.h>
 #include <linux/align.h>
 #include <linux/array_size.h>
 #include <linux/bitops.h>
@@ -12,8 +13,14 @@
 #include <linux/container_of.h>
 #include <linux/err.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/notifier.h>
 #include <linux/overflow.h>
+#include <linux/pm.h>
+#include <linux/printk.h>
 #include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/suspend.h>
 #include <linux/types.h>
 #include <linux/unaligned.h>
 #include <linux/usb.h>
@@ -84,6 +91,7 @@ static inline struct appletbdrm_plane_state *to_appletbdrm_plane_state(struct dr
 }
 
 #include "appletbdrm_protocol.h"
+#include "appletbdrm_socw.h"
 
 static u32 rect_size(struct drm_rect *rect)
 {
@@ -562,6 +570,10 @@ static int appletbdrm_probe(struct usb_interface *intf,
 			       usb_sndbulkpipe(adev_to_udev(adev), adev->out_ep));
 		usb_clear_halt(adev_to_udev(adev),
 			       usb_rcvbulkpipe(adev_to_udev(adev), adev->in_ep));
+
+		/* Kept for the module, not for this interface, and never evaluated at
+		 * probe. */
+		appletbdrm_socw_find(adev);
 	}
 
 	ret = appletbdrm_get_information(adev);
@@ -647,7 +659,11 @@ static int appletbdrm_suspend(struct usb_interface *intf, pm_message_t message)
 	int ret;
 
 	ret = drm_mode_config_helper_suspend(&adev->drm);
-	if (!ret && appletbdrm_is_t1(adev))
+	if (ret)
+		return ret;
+
+	/* The SOCW header owns the decision; the park write stays here. */
+	if (appletbdrm_is_t1(adev) && !appletbdrm_socw_skip_park(message))
 		appletbdrm_t1_park(adev);
 
 	return ret;
@@ -673,7 +689,20 @@ static struct usb_driver appletbdrm_usb_driver = {
 	.reset_resume	= appletbdrm_resume,
 	.id_table	= appletbdrm_usb_id_table,
 };
-module_usb_driver(appletbdrm_usb_driver);
+
+static int __init appletbdrm_init(void)
+{
+	/* The SOCW notifier and the USB driver are registered as one pair. */
+	return appletbdrm_socw_register(&appletbdrm_usb_driver);
+}
+
+static void __exit appletbdrm_exit(void)
+{
+	appletbdrm_socw_unregister(&appletbdrm_usb_driver);
+}
+
+module_init(appletbdrm_init);
+module_exit(appletbdrm_exit);
 
 MODULE_DESCRIPTION("Apple Touch Bar DRM Driver");
 MODULE_LICENSE("GPL");
