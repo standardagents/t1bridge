@@ -1,43 +1,53 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Run the real resume callbacks with synthetic USB/DRM boundaries. */
+/* Run the real rearm and mode-restore path through the header it owns, with synthetic
+ * USB and DRM boundaries and a fault injected at every step. The SOCW handshake —
+ * discovery, the system-sleep notifier, the park decision, re-enumeration and the
+ * registration pair — is a separate concern and runs in test_appletbdrm_socw.c. */
 #include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 
-enum step { CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, RESTORE };
-static const enum step recovery[] = {
-	CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, CLEAR, RESTORE,
-};
-static enum step observed[sizeof(recovery) / sizeof(recovery[0])];
-static size_t calls, fail_at, errors;
-static int failure;
-
 struct usb_device { int unused; };
 struct drm_device { int unused; };
+
 struct appletbdrm_device {
 	struct usb_device usb;
 	struct drm_device drm;
 	unsigned int in_ep, out_ep;
 	bool t1;
 };
+
 struct usb_interface {
 	struct appletbdrm_device *data;
 	unsigned int needs_binding;
 };
 
-static int perform(enum step step)
-{
-	assert(calls < sizeof(observed) / sizeof(observed[0]));
-	observed[calls++] = step;
-	return calls == fail_at ? failure : 0;
-}
-
 #define adev_to_udev(adev) (&(adev)->usb)
 #define usb_get_intfdata(intf) ((intf)->data)
 #define appletbdrm_is_t1(adev) ((adev)->t1)
-#define drm_err(drm, format, error) ((void)(drm), (void)(format), (void)(error), ++errors)
+
+enum step { CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, RESTORE };
+
+static const enum step recovery[] = {
+	CLEAR_OUT, CLEAR_IN, INFORMATION, READINESS, CLEAR, CLEAR, RESTORE,
+};
+
+static enum step observed[16];
+static size_t calls, fail_at;
+static int failure, errors;
+
+static int record(enum step step)
+{
+	assert(calls < sizeof(observed) / sizeof(observed[0]));
+
+	observed[calls++] = step;
+
+	return calls == fail_at ? failure : 0;
+}
+
+#define drm_err(drm, format, value) ((void)(drm), (void)(format), ++errors)
 
 static unsigned int usb_sndbulkpipe(struct usb_device *usb, unsigned int ep)
 {
@@ -56,34 +66,41 @@ static unsigned int usb_rcvbulkpipe(struct usb_device *usb, unsigned int ep)
 static int usb_clear_halt(struct usb_device *usb, unsigned int pipe)
 {
 	(void)usb;
-	return perform((enum step)pipe);
+	return record((enum step)pipe);
 }
 
 static int appletbdrm_get_information(struct appletbdrm_device *adev)
 {
 	(void)adev;
-	return perform(INFORMATION);
+	return record(INFORMATION);
 }
 
 static int appletbdrm_signal_readiness(struct appletbdrm_device *adev)
 {
 	(void)adev;
-	return perform(READINESS);
+	return record(READINESS);
 }
 
 static int appletbdrm_clear_display(struct appletbdrm_device *adev)
 {
 	(void)adev;
-	return perform(CLEAR);
+	return record(CLEAR);
 }
 
 static int drm_mode_config_helper_resume(struct drm_device *drm)
 {
 	(void)drm;
-	return perform(RESTORE);
+	return record(RESTORE);
 }
 
 #include "appletbdrm_resume.h"
+
+/* Start a case from an empty recording. */
+static void reset(void)
+{
+	calls = fail_at = 0;
+	failure = errors = 0;
+}
 
 static void test_t1_resume(void)
 {
@@ -96,7 +113,8 @@ static void test_t1_resume(void)
 			struct appletbdrm_device adev = { .t1 = true, .out_ep = 2, .in_ep = 5 };
 			struct usb_interface intf = { .data = &adev };
 
-			calls = errors = 0;
+			/* Clear the recording for each case. */
+			reset();
 			fail_at = failed;
 			failure = failures[error];
 			assert(appletbdrm_resume(&intf) == (failed ? failure : 0));
@@ -115,7 +133,7 @@ static void test_other_device_keeps_drm_resume_behavior(void)
 		struct appletbdrm_device adev = { 0 };
 		struct usb_interface intf = { .data = &adev };
 
-		calls = errors = 0;
+		reset();
 		fail_at = failed;
 		failure = -EIO;
 		assert(appletbdrm_resume(&intf) == (failed ? -EIO : 0));
