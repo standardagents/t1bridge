@@ -120,9 +120,6 @@ fn compile_recovery(objects: &mut Vec<PathBuf>, compiler: &OsStr, manifest: &Pat
             &output.join(format!("{name}.o")),
         ));
     }
-    for library in ["curl", "archive", "crypto", "udev"] {
-        println!("cargo:rustc-link-lib={library}");
-    }
 }
 
 fn compile_usb_cycle_guard(
@@ -156,6 +153,13 @@ fn link_native(
         run(&mut command, "C archive");
         println!("cargo:rustc-link-search=native={}", output.display());
         println!("cargo:rustc-link-lib=static=t1_platform_native");
+    }
+    // Dynamic libraries must follow the static archive that references them;
+    // linkers that default to --as-needed (Debian/Ubuntu) drop them otherwise.
+    if env::var_os("CARGO_FEATURE_ONLINE_RECOVERY").is_some() {
+        for library in ["curl", "archive", "crypto", "udev"] {
+            println!("cargo:rustc-link-lib={library}");
+        }
     }
     if xz {
         println!("cargo:rustc-link-lib=lzma");
