@@ -1,0 +1,32 @@
+; t1bridge_fprintd: SELinux policy for the T1Bridge fingerprint broker socket on systems where
+; fprintd runs confined (fprintd_t), such as Fedora and RHEL with the targeted policy.
+;
+; Without it, the patched libfprint driver inside fprintd cannot open
+; /run/t1bridge/fingerprint.sock and `fprintd-enroll` / `fprintd-verify` fail with
+; "Open failed with error: fingerprint broker connection failed".
+;
+; The socket gets its own type instead of the generic var_run_t, so fprintd gains access to
+; this one socket only.
+;
+; Install:  sudo semodule -i t1bridge_fprintd.cil
+;           sudo systemctl restart t1bridge-fingerprint.socket
+; Remove:   sudo semodule -r t1bridge_fprintd
+
+(type t1bridge_fingerprint_sock_t)
+(roletype object_r t1bridge_fingerprint_sock_t)
+(typeattributeset file_type (t1bridge_fingerprint_sock_t))
+(filecon "/run/t1bridge/fingerprint\.sock" socket
+    (system_u object_r t1bridge_fingerprint_sock_t ((s0) (s0))))
+
+; systemd creates the socket from t1bridge-fingerprint.socket, labels it from the file
+; context above, and removes it when the unit stops. /run is tmpfs.
+(allow init_t t1bridge_fingerprint_sock_t (sock_file (create getattr setattr unlink write)))
+(allow t1bridge_fingerprint_sock_t tmpfs_t (filesystem (associate)))
+
+; fprintd opens the socket path ...
+(allow fprintd_t t1bridge_fingerprint_sock_t (sock_file (write getattr)))
+; ... and connects to its owner: systemd (init_t) holds the listening socket until the broker
+; is activated; afterwards the broker owns it. The broker is installed as bin_t and so runs as
+; unconfined_service_t.
+(allow fprintd_t init_t (unix_stream_socket (connectto)))
+(allow fprintd_t unconfined_service_t (unix_stream_socket (connectto)))

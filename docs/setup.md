@@ -166,6 +166,29 @@ review](linux-recovery.md). Consider that attended online route only after
 usable local EFI and same-Mac backups have been exhausted. Its reported results
 do not yet establish a supported T1Bridge installer recovery path.
 
+### SELinux (Fedora, RHEL)
+
+With SELinux enforcing, the targeted policy confines fprintd (`fprintd_t`), and
+it cannot open the broker's `/run/t1bridge/fingerprint.sock`. Enrollment and
+verification then fail before any touch with `failed to claim device` /
+`fingerprint broker connection failed`, and the audit log shows a `denied
+{ write }` for `fprintd` on `fingerprint.sock`.
+
+Install the policy module from
+[`packaging/selinux/t1bridge_fprintd.cil`](../packaging/selinux/t1bridge_fprintd.cil),
+then recreate the socket so it gets its own label:
+
+```sh
+sudo semodule -i packaging/selinux/t1bridge_fprintd.cil
+sudo systemctl restart t1bridge-fingerprint.socket
+ls -Z /run/t1bridge/fingerprint.sock   # expect t1bridge_fingerprint_sock_t
+```
+
+The module gives the socket a dedicated type and allows fprintd to write to and
+connect through that socket only; systemd may create and remove it. It does not
+change the broker's sandbox or any PAM configuration. Remove it with
+`sudo semodule -r t1bridge_fprintd`.
+
 ## Enroll and verify
 
 Run these commands as your normal user in a terminal inside your graphical
